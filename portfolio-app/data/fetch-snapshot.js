@@ -85,9 +85,16 @@ function isoDaysAgo(refDate, daysAgo) {
   return d.toISOString().slice(0, 10);
 }
 
-/** Today's calendar date (YYYY-MM-DD) — used as the rolling history end. */
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+/**
+ * Last completed Friday (YYYY-MM-DD).
+ * Yahoo's in-progress weekly bar has null close/adjClose — exclude the open week.
+ * @param {Date} [refDate]
+ * @returns {string}
+ */
+function lastCompletedFridayISO(refDate = new Date()) {
+  const day = refDate.getUTCDay(); // 0 Sun … 5 Fri … 6 Sat
+  const daysBack = day >= 5 ? day - 5 : day + 2;
+  return isoDaysAgo(refDate, day === 5 ? 7 : daysBack);
 }
 
 /**
@@ -112,9 +119,10 @@ function serializePriceHistory(history) {
 async function buildSnapshot() {
   console.log('🚀  IDX Portfolio Snapshot — Yahoo Finance v3\n');
 
-  const historyEnd = '2026-05-25';
-  const volEnd = historyEnd;
-  const volStart = isoDaysAgo(new Date(volEnd), 400); // ~1.1 calendar years → ≥252 trading days
+  const now = new Date();
+  const weeklyEnd = lastCompletedFridayISO(now);
+  const dailyEnd  = isoDaysAgo(now, 1); // skip today's partial daily bar
+  const volStart  = isoDaysAgo(new Date(dailyEnd), 400); // ~1.1 calendar years → ≥252 trading days
 
   const assetProfiles = [];
 
@@ -125,7 +133,7 @@ async function buildSnapshot() {
       // ── 1. Full 5-year weekly history ──────────────────────────────────────
       const rawHistory = await yahooFinance.historical(ticker, {
         period1:  FULL_HISTORY.start,
-        period2:  historyEnd,
+        period2:  weeklyEnd,
         interval: FULL_HISTORY.interval,
       });
 
@@ -135,7 +143,7 @@ async function buildSnapshot() {
       // ── 2. Theta-decay daily vol (1-year lookback, recent days weighted higher) ─
       const dailyHistory = await yahooFinance.historical(ticker, {
         period1:  volStart,
-        period2:  volEnd,
+        period2:  dailyEnd,
         interval: '1d',
       });
       dailyHistory.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -204,7 +212,7 @@ async function buildSnapshot() {
     console.log('  ↳ Fetching IHSG benchmark (^JKSE) …');
     const rawBench = await yahooFinance.historical(BENCHMARK_TICKER, {
       period1:  FULL_HISTORY.start,
-      period2:  historyEnd,
+      period2:  weeklyEnd,
       interval: FULL_HISTORY.interval,
     });
     rawBench.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -223,7 +231,7 @@ async function buildSnapshot() {
     generated:    new Date().toISOString(),
     description:  'IDX Large-Cap Live Snapshot — fetched from Yahoo Finance v3',
     riskFreeRate: 0.0525, // BI 7-day reverse repo rate as of May 2026
-    historyRange: { start: FULL_HISTORY.start, end: historyEnd, interval: '1wk' },
+    historyRange: { start: FULL_HISTORY.start, end: weeklyEnd, interval: '1wk' },
     benchmark,
     assets:       assetProfiles,
   };
