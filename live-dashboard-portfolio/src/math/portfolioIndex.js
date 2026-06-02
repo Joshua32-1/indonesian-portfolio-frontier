@@ -5,6 +5,9 @@
  * Stitching rule: each portfolio has a rebalances[] array sorted by effective date.
  * Weights apply from their effective date forward; the index level NEVER resets
  * on rebalance — it compounds continuously from inception.
+ *
+ * Interval: daily adjusted close (IDX trading days only — weekends and holidays
+ * have no bar and are not represented in the series).
  */
 
 import { alignPriceSeries } from './priceAlign.js';
@@ -12,14 +15,14 @@ import { alignPriceSeries } from './priceAlign.js';
 /**
  * Returns the weight set active on or before a given ISO date.
  * @param {{ effective: string, weights: Record<string,number> }[]} rebalances - sorted ascending
- * @param {string} weekISO
+ * @param {string} barDate — YYYY-MM-DD of the current daily bar
  * @returns {Record<string,number>}
  */
-export function weightsAtDate(rebalances, weekISO) {
+export function weightsAtDate(rebalances, barDate) {
   if (!rebalances?.length) return {};
   let active = rebalances[0].weights;
   for (const r of rebalances) {
-    if (r.effective <= weekISO) active = r.weights;
+    if (r.effective <= barDate) active = r.weights;
     else break;
   }
   return active;
@@ -43,7 +46,7 @@ function decimalLogReturns(prices) {
 }
 
 /**
- * Builds a stitched indexed series (base 100 at first valid week) for one portfolio.
+ * Builds a stitched indexed series (base 100 at first daily bar >= inception) for one portfolio.
  *
  * @param {{
  *   id: string,
@@ -51,7 +54,7 @@ function decimalLogReturns(prices) {
  * }} portfolio
  * @param {Array<{ ticker: string, priceHistory: { dates: string[], adjClose: number[] } }>} assets
  * @param {{ dates: string[], adjClose: number[] }} benchmarkHistory - IHSG
- * @param {string} inception - ISO date; series starts from first weekly bar >= inception
+ * @param {string} inception - ISO date; series starts from first daily bar >= inception
  * @returns {{ date: string, value: number }[]} — indexed to 100 at inception
  */
 export function buildTrackerSeries(portfolio, assets, benchmarkHistory, inception) {
@@ -102,7 +105,7 @@ export function buildTrackerSeries(portfolio, assets, benchmarkHistory, inceptio
 }
 
 /**
- * Builds the IHSG indexed series (base 100 at first weekly bar >= inception).
+ * Builds the IHSG indexed series (base 100 at first daily bar >= inception).
  * @param {{ dates: string[], adjClose: number[] }} benchmarkHistory
  * @param {string} inception
  * @returns {{ date: string, value: number }[]}

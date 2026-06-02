@@ -48,7 +48,7 @@ If you see “Failed to load data”, check the browser Network tab for `live-ma
 
 Default: every push to `main` that touches the project triggers a new deploy.
 
-Price-only updates: GitHub Action `.github/workflows/refresh-dashboard.yml` commits an updated snapshot → Vercel rebuilds automatically.
+Price-only updates: GitHub Action `.github/workflows/refresh-dashboard.yml` runs `npm run fetch-snapshot` inside `live-dashboard-portfolio` at 18:00 WIB on weekdays, commits the updated snapshot, and Vercel rebuilds automatically.
 
 Weight updates: commit `data/portfolios.json` yourself → Vercel rebuilds.
 
@@ -57,6 +57,7 @@ Weight updates: commit `data/portfolios.json` yourself → Vercel rebuilds.
 1. GitHub repo → **Settings** → **Actions** → **General**.
 2. Allow actions and workflow read/write.
 3. **Actions** tab → run **Refresh Dashboard Snapshot** once manually to test.
+4. The fetch script is self-contained in `live-dashboard-portfolio` — it no longer copies from `portfolio-app`.
 
 ---
 
@@ -88,7 +89,8 @@ For a monorepo, when linking, set the project root to this folder (not the repo 
 | `npm run build` fails | Run `npm ci && npm run build` locally in `live-dashboard-portfolio` |
 | Chart empty / short history | Set earlier `inception` in `data/portfolios.json` |
 | All portfolio lines identical | Replace placeholder equal weights with optimizer weights |
-| No new prices | Check GitHub Action runs; or run `npm run sync-snapshot` and push |
+| No new prices | Check GitHub Action runs; or run `npm run fetch-snapshot` locally in `live-dashboard-portfolio` and push |
+| Chart empty near inception | Yahoo lags 1–2 sessions on adj close; wait for next nightly run or fetch manually |
 
 ---
 

@@ -337,7 +337,7 @@ export default function App() {
         <div>
           <div style={s.title}>IDX PORTFOLIO TRACKER</div>
           <div style={s.subtitle}>
-            Indexed to 100 at inception · weekly adjusted close · Jakarta Composite (IHSG) benchmark
+            Indexed to 100 at inception · daily adjusted close · Jakarta Composite (IHSG) benchmark
           </div>
         </div>
         <div style={s.metaRight}>
@@ -396,8 +396,9 @@ export default function App() {
         {!chartRows?.length ? (
           <div style={s.empty}>
             <div style={{ fontSize: 12, color: TEXT_DIM }}>
-              No chart data. Check that inception ({inception}) is within the snapshot price history,
-              and that portfolios.json weights are valid fractions summing to ~1.
+              No chart data. Daily adj close data may still be settling for recent sessions
+              (Yahoo typically lags 1–2 trading days). Check that inception ({inception}) is within
+              the snapshot price history and that portfolios.json weights sum to ~1.
             </div>
           </div>
         ) : (
@@ -407,8 +408,8 @@ export default function App() {
               <XAxis
                 dataKey="date"
                 tick={{ fill: TEXT_DIM, fontSize: 8 }}
-                tickFormatter={d => d?.slice(2, 7)}
-                minTickGap={50}
+                tickFormatter={d => d?.slice(5)}
+                minTickGap={30}
               />
               <YAxis
                 tick={{ fill: TEXT_DIM, fontSize: 8 }}

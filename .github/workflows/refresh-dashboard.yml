@@ -22,24 +22,17 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: portfolio-app/package-lock.json
+          cache-dependency-path: live-dashboard-portfolio/package-lock.json
 
-      - name: Install optimizer deps
-        working-directory: portfolio-app
+      - name: Install dashboard deps
+        working-directory: live-dashboard-portfolio
         run: npm ci
 
-      - name: Fetch latest IDX snapshot
-        working-directory: portfolio-app
+      - name: Fetch latest IDX daily snapshot
+        working-directory: live-dashboard-portfolio
         run: npm run fetch-snapshot
         env:
-          # yahoo-finance2 respects this for rate limiting
           NODE_OPTIONS: '--max-old-space-size=512'
-
-      - name: Copy snapshot to dashboard
-        run: |
-          cp portfolio-app/data/live-market-snapshot.json \
-             live-dashboard-portfolio/data/live-market-snapshot.json
-          echo "Snapshot size: $(wc -c < live-dashboard-portfolio/data/live-market-snapshot.json) bytes"
 
       - name: Commit & push if changed
         run: |
@@ -49,6 +42,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No snapshot changes — skipping commit"
           else
-            git commit -m "chore: refresh IDX snapshot $(date -u +%Y-%m-%d)"
+            git commit -m "chore: refresh IDX daily snapshot $(date -u +%Y-%m-%d)"
             git push
           fi

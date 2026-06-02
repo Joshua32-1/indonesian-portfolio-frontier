@@ -49,17 +49,18 @@ Minimal Vercel-hosted dashboard showing **indexed performance** (IHSG vs Max Sha
 
 ## Price refresh (automatic)
 
-A GitHub Action (`.github/workflows/refresh-dashboard.yml`) runs on weekdays at 11:00 UTC (18:00 WIB) to:
+A GitHub Action (`.github/workflows/refresh-dashboard.yml`) runs on weekdays at 11:00 UTC (18:00 WIB — after IDX close) to:
 
-1. Run `npm run fetch-snapshot` in `portfolio-app`.
-2. Copy the new snapshot to `live-dashboard-portfolio/data/`.
-3. Commit and push if changed → Vercel redeploys.
+1. Run `npm run fetch-snapshot` inside `live-dashboard-portfolio`.
+2. Commit and push the updated snapshot if changed → Vercel redeploys.
+
+The fetch script is self-contained in this folder. It uses `yahoo-finance2` `chart()` (not `historical()`) to avoid errors on unsettled recent bars, and drops any bar where `adjclose` is null. Yahoo typically lags 1–2 trading sessions before finalized adj closes are available.
 
 To run locally:
 
 ```bash
-cd portfolio-app && npm run fetch-snapshot
-cd ../live-dashboard-portfolio && npm run sync-snapshot
+cd live-dashboard-portfolio
+npm run fetch-snapshot
 npm run dev
 ```
 
@@ -69,8 +70,9 @@ npm run dev
 
 The chart **never resets** when you add a new rebalance. The index compounds continuously from `inception`:
 
-- Each weekly bar: `index_t = index_{t-1} × exp(Σ w_i(t) · r_i,t)`
-- `w_i(t)` = the weight active on or before that week's date
+- Each daily bar: `index_t = index_{t-1} × exp(Σ w_i(t) · r_i,t)`
+- `w_i(t)` = the weight active on or before that bar's date
+- Weekends and IDX holidays have no bar — the next trading day's return spans the full gap
 - Adding a new `effective` row only changes the **future slope** of the line; past values are identical
 
 ---
