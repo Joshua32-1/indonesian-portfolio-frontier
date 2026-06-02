@@ -1,0 +1,54 @@
+name: Refresh Dashboard Snapshot
+
+on:
+  # Weekdays at 11:00 UTC = 18:00 WIB (after IDX close at ~16:00 WIB)
+  schedule:
+    - cron: '0 11 * * 1-5'
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: portfolio-app/package-lock.json
+
+      - name: Install optimizer deps
+        working-directory: portfolio-app
+        run: npm ci
+
+      - name: Fetch latest IDX snapshot
+        working-directory: portfolio-app
+        run: npm run fetch-snapshot
+        env:
+          # yahoo-finance2 respects this for rate limiting
+          NODE_OPTIONS: '--max-old-space-size=512'
+
+      - name: Copy snapshot to dashboard
+        run: |
+          cp portfolio-app/data/live-market-snapshot.json \
+             live-dashboard-portfolio/data/live-market-snapshot.json
+          echo "Snapshot size: $(wc -c < live-dashboard-portfolio/data/live-market-snapshot.json) bytes"
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add live-dashboard-portfolio/data/live-market-snapshot.json
+          if git diff --staged --quiet; then
+            echo "No snapshot changes — skipping commit"
+          else
+            git commit -m "chore: refresh IDX snapshot $(date -u +%Y-%m-%d)"
+            git push
+          fi

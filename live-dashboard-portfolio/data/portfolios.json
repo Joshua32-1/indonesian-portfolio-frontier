@@ -1,0 +1,223 @@
+{
+  "_comment": "Update weights after each REGENERATE in portfolio-app. Append rebalance rows; never overwrite old ones.",
+  "inception": "2026-06-02",
+  "updated": "2026-06-02",
+  "portfolios": [
+    {
+      "id": "max-sharpe",
+      "label": "Max Sharpe (Consensus)",
+      "rebalances": [
+        {
+          "effective": "2026-06-02",
+          "weights": {
+            "BBCA": 0.04,
+            "BBRI": 0.04,
+            "BMRI": 0.04,
+            "TLKM": 0.04,
+            "ASII": 0.04,
+            "BIRD": 0.04,
+            "INDF": 0.04,
+            "ICBP": 0.04,
+            "JSMR": 0.04,
+            "KLBF": 0.04,
+            "SIDO": 0.04,
+            "ANTM": 0.04,
+            "BBNI": 0.04,
+            "BNGA": 0.04,
+            "CMRY": 0.04,
+            "PWON": 0.04,
+            "AMRT": 0.04,
+            "INCO": 0.04,
+            "NCKL": 0.04,
+            "MDKA": 0.04,
+            "AADI": 0.04,
+            "UNTR": 0.04,
+            "LSIP": 0.04,
+            "CPIN": 0.04,
+            "ISAT": 0.04
+          }
+        }
+      ]
+    },
+    {
+      "id": "min-var",
+      "label": "Min Variance",
+      "rebalances": [
+        {
+          "effective": "2026-06-02",
+          "weights": {
+            "BBCA": 0.04,
+            "BBRI": 0.04,
+            "BMRI": 0.04,
+            "TLKM": 0.04,
+            "ASII": 0.04,
+            "BIRD": 0.04,
+            "INDF": 0.04,
+            "ICBP": 0.04,
+            "JSMR": 0.04,
+            "KLBF": 0.04,
+            "SIDO": 0.04,
+            "ANTM": 0.04,
+            "BBNI": 0.04,
+            "BNGA": 0.04,
+            "CMRY": 0.04,
+            "PWON": 0.04,
+            "AMRT": 0.04,
+            "INCO": 0.04,
+            "NCKL": 0.04,
+            "MDKA": 0.04,
+            "AADI": 0.04,
+            "UNTR": 0.04,
+            "LSIP": 0.04,
+            "CPIN": 0.04,
+            "ISAT": 0.04
+          }
+        }
+      ]
+    },
+    {
+      "id": "tail-10",
+      "label": "Tail λ=0.10",
+      "rebalances": [
+        {
+          "effective": "2026-06-02",
+          "weights": {
+            "BBCA": 0.04,
+            "BBRI": 0.04,
+            "BMRI": 0.04,
+            "TLKM": 0.04,
+            "ASII": 0.04,
+            "BIRD": 0.04,
+            "INDF": 0.04,
+            "ICBP": 0.04,
+            "JSMR": 0.04,
+            "KLBF": 0.04,
+            "SIDO": 0.04,
+            "ANTM": 0.04,
+            "BBNI": 0.04,
+            "BNGA": 0.04,
+            "CMRY": 0.04,
+            "PWON": 0.04,
+            "AMRT": 0.04,
+            "INCO": 0.04,
+            "NCKL": 0.04,
+            "MDKA": 0.04,
+            "AADI": 0.04,
+            "UNTR": 0.04,
+            "LSIP": 0.04,
+            "CPIN": 0.04,
+            "ISAT": 0.04
+          }
+        }
+      ]
+    },
+    {
+      "id": "tail-20",
+      "label": "Tail λ=0.20",
+      "rebalances": [
+        {
+          "effective": "2026-06-02",
+          "weights": {
+            "BBCA": 0.04,
+            "BBRI": 0.04,
+            "BMRI": 0.04,
+            "TLKM": 0.04,
+            "ASII": 0.04,
+            "BIRD": 0.04,
+            "INDF": 0.04,
+            "ICBP": 0.04,
+            "JSMR": 0.04,
+            "KLBF": 0.04,
+            "SIDO": 0.04,
+            "ANTM": 0.04,
+            "BBNI": 0.04,
+            "BNGA": 0.04,
+            "CMRY": 0.04,
+            "PWON": 0.04,
+            "AMRT": 0.04,
+            "INCO": 0.04,
+            "NCKL": 0.04,
+            "MDKA": 0.04,
+            "AADI": 0.04,
+            "UNTR": 0.04,
+            "LSIP": 0.04,
+            "CPIN": 0.04,
+            "ISAT": 0.04
+          }
+        }
+      ]
+    },
+    {
+      "id": "tail-35",
+      "label": "Tail λ=0.35",
+      "rebalances": [
+        {
+          "effective": "2026-06-02",
+          "weights": {
+            "BBCA": 0.04,
+            "BBRI": 0.04,
+            "BMRI": 0.04,
+            "TLKM": 0.04,
+            "ASII": 0.04,
+            "BIRD": 0.04,
+            "INDF": 0.04,
+            "ICBP": 0.04,
+            "JSMR": 0.04,
+            "KLBF": 0.04,
+            "SIDO": 0.04,
+            "ANTM": 0.04,
+            "BBNI": 0.04,
+            "BNGA": 0.04,
+            "CMRY": 0.04,
+            "PWON": 0.04,
+            "AMRT": 0.04,
+            "INCO": 0.04,
+            "NCKL": 0.04,
+            "MDKA": 0.04,
+            "AADI": 0.04,
+            "UNTR": 0.04,
+            "LSIP": 0.04,
+            "CPIN": 0.04,
+            "ISAT": 0.04
+          }
+        }
+      ]
+    },
+    {
+      "id": "tail-50",
+      "label": "Tail λ=0.50",
+      "rebalances": [
+        {
+          "effective": "2026-06-02",
+          "weights": {
+            "BBCA": 0.04,
+            "BBRI": 0.04,
+            "BMRI": 0.04,
+            "TLKM": 0.04,
+            "ASII": 0.04,
+            "BIRD": 0.04,
+            "INDF": 0.04,
+            "ICBP": 0.04,
+            "JSMR": 0.04,
+            "KLBF": 0.04,
+            "SIDO": 0.04,
+            "ANTM": 0.04,
+            "BBNI": 0.04,
+            "BNGA": 0.04,
+            "CMRY": 0.04,
+            "PWON": 0.04,
+            "AMRT": 0.04,
+            "INCO": 0.04,
+            "NCKL": 0.04,
+            "MDKA": 0.04,
+            "AADI": 0.04,
+            "UNTR": 0.04,
+            "LSIP": 0.04,
+            "CPIN": 0.04,
+            "ISAT": 0.04
+          }
+        }
+      ]
+    }
+  ]
+}
