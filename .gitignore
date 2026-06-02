@@ -1,12 +1,25 @@
 # Monorepo root .gitignore
 
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
 # Dependency directories
 **/node_modules/
+node_modules
 **/.pnpm-store/
 
 # Build output
 **/dist/
 **/build/
+dist
+dist-ssr
+*.local
 
 # OS
 .DS_Store
@@ -14,10 +27,16 @@
 Thumbs.db
 
 # Editor / IDE
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 .idea/
+.idea
 *.swp
 *.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 
 # Env files (never commit secrets)
 **/.env
