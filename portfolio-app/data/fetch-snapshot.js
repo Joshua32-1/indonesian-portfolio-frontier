@@ -25,7 +25,12 @@ import {
 import { resolveSectorFromQuoteSummary } from '../src/math/assetSector.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+const yahooFinance = new YahooFinance({
+  suppressNotices: ['yahooSurvey', 'ripHistorical'],
+});
+
+/** IDX market calendar — all snapshot end dates use Jakarta, not local/UTC. */
+const JAKARTA_TZ = 'Asia/Jakarta';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -74,27 +79,72 @@ function toDecimalLogReturns(prices) {
 }
 
 /**
- * ISO date string for `daysAgo` calendar days before `refDate`.
- * @param {Date} refDate
- * @param {number} daysAgo
+ * YYYY-MM-DD on the Jakarta calendar for `refDate`.
+ * @param {Date} [refDate]
  * @returns {string}
  */
-function isoDaysAgo(refDate, daysAgo) {
-  const d = new Date(refDate);
-  d.setDate(d.getDate() - daysAgo);
-  return d.toISOString().slice(0, 10);
+function jakartaISO(refDate = new Date()) {
+  return refDate.toLocaleDateString('en-CA', { timeZone: JAKARTA_TZ });
 }
 
 /**
- * Last completed Friday (YYYY-MM-DD).
+ * Adds calendar days to a YYYY-MM-DD string (UTC-safe; avoids local/UTC drift).
+ * @param {string} isoDate
+ * @param {number} days
+ * @returns {string}
+ */
+function addCalendarDays(isoDate, days) {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/** Weekday in Jakarta: 0 Sun … 6 Sat. */
+function jakartaWeekday(refDate = new Date()) {
+  const label = refDate.toLocaleDateString('en-US', {
+    timeZone: JAKARTA_TZ,
+    weekday: 'short',
+  });
+  return { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[label];
+}
+
+/**
+ * Last completed Friday (YYYY-MM-DD, Jakarta).
  * Yahoo's in-progress weekly bar has null close/adjClose — exclude the open week.
  * @param {Date} [refDate]
  * @returns {string}
  */
 function lastCompletedFridayISO(refDate = new Date()) {
-  const day = refDate.getUTCDay(); // 0 Sun … 5 Fri … 6 Sat
+  const day = jakartaWeekday(refDate);
   const daysBack = day >= 5 ? day - 5 : day + 2;
-  return isoDaysAgo(refDate, day === 5 ? 7 : daysBack);
+  const offset = day === 5 ? 7 : daysBack;
+  return addCalendarDays(jakartaISO(refDate), -offset);
+}
+
+/** Last completed IDX session (yesterday in Jakarta). */
+function lastCompletedTradingDayISO(refDate = new Date()) {
+  return addCalendarDays(jakartaISO(refDate), -1);
+}
+
+/**
+ * Price history via chart(); drops unsettled bars (null close/adjclose).
+ * historical() throws on Yahoo's partial-null rows (e.g. corrupted 2026-06-01 IDX bar).
+ * @param {string} ticker
+ * @param {{ period1: string, period2: string, interval: string }} opts
+ * @returns {Promise<Array<{ date: Date, adjClose?: number, close?: number }>>}
+ */
+async function fetchPriceHistory(ticker, { period1, period2, interval }) {
+  const result = await yahooFinance.chart(ticker, { period1, period2, interval });
+  const quotes = result.quotes ?? [];
+  quotes.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  return quotes
+    .filter(q => q?.date && (q.adjclose != null || q.close != null))
+    .map(({ adjclose, ...rest }) => {
+      const row = { ...rest };
+      if (adjclose != null) row.adjClose = adjclose;
+      if (row.close == null && adjclose != null) row.close = adjclose;
+      return row;
+    });
 }
 
 /**
@@ -103,6 +153,11 @@ function lastCompletedFridayISO(refDate = new Date()) {
  * @param {Array<{date: Date, adjClose: number}>} history
  * @returns {{ interval: string, dates: string[], adjClose: number[] }}
  */
+/** Drops weekly bars dated after `isoEnd` (open week can still have a non-null adjClose). */
+function throughDate(history, isoEnd) {
+  return history.filter(row => new Date(row.date).toISOString().slice(0, 10) <= isoEnd);
+}
+
 function serializePriceHistory(history) {
   const dates = [];
   const adjClose = [];
@@ -121,8 +176,10 @@ async function buildSnapshot() {
 
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
-  const dailyEnd  = isoDaysAgo(now, 1); // skip today's partial daily bar
-  const volStart  = isoDaysAgo(new Date(dailyEnd), 400); // ~1.1 calendar years → ≥252 trading days
+  const dailyEnd  = lastCompletedTradingDayISO(now);
+  const volStart  = addCalendarDays(dailyEnd, -400); // ~1.1 calendar years → ≥252 trading days
+  // chart period2 is exclusive-ish; use tomorrow Jakarta so the latest settled bar is included
+  const chartEnd  = addCalendarDays(jakartaISO(now), 1);
 
   const assetProfiles = [];
 
@@ -131,19 +188,19 @@ async function buildSnapshot() {
       console.log(`  ↳ Fetching ${ticker} …`);
 
       // ── 1. Full 5-year weekly history ──────────────────────────────────────
-      const rawHistory = await yahooFinance.historical(ticker, {
+      let rawHistory = await fetchPriceHistory(ticker, {
         period1:  FULL_HISTORY.start,
-        period2:  weeklyEnd,
+        period2:  chartEnd,
         interval: FULL_HISTORY.interval,
       });
 
-      // Sort ascending — Yahoo occasionally returns in reverse order
       rawHistory.sort((a, b) => new Date(a.date) - new Date(b.date));
+      rawHistory = throughDate(rawHistory, weeklyEnd);
 
       // ── 2. Theta-decay daily vol (1-year lookback, recent days weighted higher) ─
-      const dailyHistory = await yahooFinance.historical(ticker, {
+      const dailyHistory = await fetchPriceHistory(ticker, {
         period1:  volStart,
-        period2:  dailyEnd,
+        period2:  chartEnd,
         interval: '1d',
       });
       dailyHistory.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -210,16 +267,17 @@ async function buildSnapshot() {
   let benchmark = null;
   try {
     console.log('  ↳ Fetching IHSG benchmark (^JKSE) …');
-    const rawBench = await yahooFinance.historical(BENCHMARK_TICKER, {
+    const rawBench = await fetchPriceHistory(BENCHMARK_TICKER, {
       period1:  FULL_HISTORY.start,
-      period2:  weeklyEnd,
+      period2:  chartEnd,
       interval: FULL_HISTORY.interval,
     });
     rawBench.sort((a, b) => new Date(a.date) - new Date(b.date));
+    const benchHistory = throughDate(rawBench, weeklyEnd);
     benchmark = {
       ticker:       'IHSG',
       yahooTicker:  BENCHMARK_TICKER,
-      priceHistory: serializePriceHistory(rawBench),
+      priceHistory: serializePriceHistory(benchHistory),
     };
     console.log(`  ✅ IHSG done  (${benchmark.priceHistory.dates.length} weekly bars)\n`);
   } catch (err) {
