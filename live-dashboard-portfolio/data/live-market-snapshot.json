@@ -1,9 +1,9 @@
 {
-  "generated": "2026-06-02T17:57:50.269Z",
+  "generated": "2026-06-08T17:57:50.269Z",
   "description": "IDX Live Dashboard — daily adjusted close",
   "historyRange": {
-    "start": "2026-06-02",
-    "end": "2026-06-02",
+    "start": "2026-06-08",
+    "end": "2026-06-08",
     "interval": "1d"
   },
   "benchmark": {
@@ -12,10 +12,10 @@
     "priceHistory": {
       "interval": "1d",
       "dates": [
-        "2026-06-02"
+        "2026-06-08"
       ],
       "adjClose": [
-        6195.4268
+        5342.14
       ]
     }
   },
@@ -25,10 +25,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          5825
+          4850
         ]
       }
     },
@@ -37,10 +37,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          3040
+          2590
         ]
       }
     },
@@ -49,7 +49,7 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
           4170
@@ -61,10 +61,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          2950
+          2350
         ]
       }
     },
@@ -73,10 +73,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          4900
+          4360
         ]
       }
     },
@@ -85,10 +85,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          1570
+          1380
         ]
       }
     },
@@ -97,10 +97,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          6575
+          5925
         ]
       }
     },
@@ -109,10 +109,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          6800
+          6000
         ]
       }
     },
@@ -121,10 +121,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          3040
+          2700
         ]
       }
     },
@@ -133,10 +133,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          745
+          665
         ]
       }
     },
@@ -148,7 +148,7 @@
           "2026-06-02"
         ],
         "adjClose": [
-          384
+          354
         ]
       }
     },
@@ -157,10 +157,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          2960
+          2530
         ]
       }
     },
@@ -169,10 +169,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          3760
+          3010
         ]
       }
     },
@@ -181,10 +181,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          1615
+          1470
         ]
       }
     },
@@ -196,7 +196,7 @@
           "2026-06-02"
         ],
         "adjClose": [
-          4790
+          4120
         ]
       }
     },
@@ -205,10 +205,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          282
+          244
         ]
       }
     },
@@ -217,10 +217,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          1380
+          1195
         ]
       }
     },
@@ -229,10 +229,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          4730
+          4240
         ]
       }
     },
@@ -241,10 +241,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          885
+          780
         ]
       }
     },
@@ -253,10 +253,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          2640
+          2420
         ]
       }
     },
@@ -265,10 +265,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          8325
+          7450
         ]
       }
     },
@@ -277,10 +277,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          22500
+          20875
         ]
       }
     },
@@ -289,10 +289,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          1270
+          1100
         ]
       }
     },
@@ -301,10 +301,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          4060
+          3150
         ]
       }
     },
@@ -313,10 +313,10 @@
       "priceHistory": {
         "interval": "1d",
         "dates": [
-          "2026-06-02"
+          "2026-06-08"
         ],
         "adjClose": [
-          2130
+          1715
         ]
       }
     }
