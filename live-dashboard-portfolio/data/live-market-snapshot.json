@@ -1,5 +1,5 @@
 {
-  "generated": "2026-06-10T09:18:18.158Z",
+  "generated": "2026-06-10T14:27:16.445Z",
   "description": "IDX Live Dashboard — daily adjusted close",
   "historyRange": {
     "start": "2026-06-08",
@@ -18,7 +18,7 @@
       ],
       "adjClose": [
         5342.1372,
-        5746.65,
+        5746.6479,
         5902.376
       ]
     }
