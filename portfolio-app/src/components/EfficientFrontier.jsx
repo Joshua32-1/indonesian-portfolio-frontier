@@ -93,7 +93,7 @@ function FrontierLineDot(props) {
   return <circle cx={cx} cy={cy} r={isActive ? 5 : 3} fill={payload?.color ?? '#888'} opacity={0.9} stroke="#000" strokeWidth={0.5} />;
 }
 
-function FrontierTooltip({ active, payload, riskFreeRate = 0.0525 }) {
+function FrontierTooltip({ active, payload, riskFreeRate = 0.0575 }) {
   if (!active || !payload?.length) return null;
   const d = payload[0]?.payload;
   if (!d) return null;
@@ -154,7 +154,7 @@ function lambdaColor(lambda) {
   return `rgb(${r},${g},50)`;
 }
 
-export default function EfficientFrontier({ simulationResult, isRunning, corrStart, corrEnd, riskFreeRate = 0.0525, mcIterations = 100000 }) {
+export default function EfficientFrontier({ simulationResult, isRunning, corrStart, corrEnd, riskFreeRate = 0.0575, mcIterations = 100000 }) {
   const { cloudData, optimaData, specialData, frontierData, domainX, domainY, sharpeMin, sharpeRange, meta } = useMemo(() => {
     if (!simulationResult) return {};
 

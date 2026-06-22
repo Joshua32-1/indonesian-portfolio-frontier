@@ -436,7 +436,7 @@ Note that IDX sector labels come from Yahoo's `assetProfile.industry` field (e.g
 | 10,000–25,000 | Exploratory; adjusting BL sliders | Noticeably less precise CVaR; weights usually stable |
 | 1,000 | Quick sanity checks | Tail metrics unreliable; weights can vary significantly run to run |
 
-**Important distinction.** The optimizer itself always uses a fixed 1,000-path subsample of the scenario bank regardless of the full MC path count. Increasing MC iterations beyond 1,000 does not make the optimizer "smarter" — it improves the accuracy of the Analytics reporting (P10/P50/P90, CVaR, stress tests) by giving the reporting layer more scenarios to draw from.
+**Important distinction.** The optimizer uses a subsample (default 1,000, adjustable 1k–20k in the WORKSPACE panel) of the scenario bank rather than the full MC path count. Increasing MC iterations beyond the subsample size does not make the optimizer "smarter" — it improves the accuracy of the Analytics reporting (P10/P50/P90, CVaR, stress tests) by giving the reporting layer more scenarios to draw from. Raising the subsample itself trades per-run speed for steadier weights.
 
 For final weights before execution, always use 100,000 paths.
 
@@ -566,7 +566,7 @@ Complete reference of every user-facing parameter, its location in the UI, its r
 |-----------|-------------|-------|---------|----------------|
 | Vol half-life | WORKSPACE, vol panel | 5–126 days | 63 | [Part III](README.md#part-iii--volatility-theta-decay) |
 | MC iterations | WORKSPACE, simulation panel | 1,000–100,000 | 100,000 | [Part IV](README.md#part-iv--expected-returns-from-analyst-targets) |
-| Risk-free rate | WORKSPACE, simulation panel | 0–15% | 5.25% | [Part IV](README.md#part-iv--expected-returns-from-analyst-targets) |
+| Risk-free rate | WORKSPACE, simulation panel | 0–15% | 5.75% | [Part IV](README.md#part-iv--expected-returns-from-analyst-targets) |
 | `useFactorModel` | WORKSPACE, factor panel | Toggle | OFF | [Part V](README.md#part-v--black-litterman-factor-model) |
 | `useBlackLitterman` | WORKSPACE, factor panel | Toggle | ON | [Part V](README.md#part-v--black-litterman-factor-model) |
 | `useCapPrior` | WORKSPACE, factor panel | Toggle | ON | [Part V](README.md#part-v--black-litterman-factor-model) |

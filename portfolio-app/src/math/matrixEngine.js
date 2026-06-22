@@ -480,12 +480,12 @@ export function portfolioVariance(weights, covMatrix) {
 }
 
 /** (μ_p − r_f) / σ_p  —  Sharpe ratio. All inputs must be in the same units. */
-export function sharpeRatio(ret, risk, rf = 0.0525) {
+export function sharpeRatio(ret, risk, rf = 0.0575) {
   return risk <= 0 ? 0 : (ret - rf) / risk;
 }
 
 /** Reconcile stored Sharpe from portfolio return and risk (single source of truth). */
-export function reconcilePortfolioSharpe(portfolio, rf = 0.0525) {
+export function reconcilePortfolioSharpe(portfolio, rf = 0.0575) {
   if (!portfolio) return 0;
   return sharpeRatio(portfolio.portfolioReturn ?? 0, portfolio.portfolioRisk ?? 0, rf);
 }

@@ -93,7 +93,7 @@ function pertSample(low, mode, high) {
  *   μᵢ = (sampled_price_i − current_price_i) / current_price_i + dividend yield
  *
  * Analyst targets are 12-month forward prices, so this return is implicitly
- * annualised and directly comparable to the 5.25% BI risk-free rate.
+ * annualised and directly comparable to the 5.75% BI risk-free rate.
  *
  * @param {Asset} asset
  * @returns {number}  annualised decimal return (e.g. 0.14 = +14%)
@@ -886,7 +886,7 @@ export function buildScenarioBank({
   factorConfig     = null,
   iterations       = 100000,
   optimizerPaths   = ROBUST_SUBSAMPLE_SIZE,
-  riskFreeRate     = 0.0525,
+  riskFreeRate     = 0.0575,
   maxPositionCap   = 1,
   userPositionCaps = {},
 }) {
@@ -952,7 +952,7 @@ export function runMonteCarloSimulation({
   covMatrix,
   sectorCaps          = {},
   maxPositionCap      = 1,
-  riskFreeRate        = 0.0525,
+  riskFreeRate        = 0.0575,
   iterations          = 100000,
   factorConfig        = null,
   // Robust options

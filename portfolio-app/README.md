@@ -2,7 +2,7 @@
 
 A Monte Carlo portfolio optimizer for Indonesian large-cap equities. It pulls live market data from Yahoo Finance, samples analyst price-target distributions to build return scenarios, optionally blends them with Black-Litterman equilibrium views, and finds the allocation that maximizes a tail-aware Sharpe ratio under your sector and position constraints.
 
-> **IDX context.** The default universe is ~25 `.JK` tickers covering the most liquid names on Bursa Efek Indonesia. Analyst 12-month price targets on IDX stocks average roughly 50 percentage points above the cap-weight equilibrium implied return — structural sell-side optimism that the Black-Litterman prior is specifically designed to counteract. The risk-free rate defaults to 5.25%, matching the Bank Indonesia 7-day reverse repo rate as of mid-2026. Both values are editable in [`data/fetch-snapshot.js`](data/fetch-snapshot.js).
+> **IDX context.** The default universe is ~25 `.JK` tickers covering the most liquid names on Bursa Efek Indonesia. Analyst 12-month price targets on IDX stocks average roughly 50 percentage points above the cap-weight equilibrium implied return — structural sell-side optimism that the Black-Litterman prior is specifically designed to counteract. The risk-free rate is live-fetched from the Bank Indonesia BI-Rate (5.75% as of mid-2026), with a hardcoded fallback in [`data/fetch-snapshot.js`](data/fetch-snapshot.js) if the fetch fails. Both the universe and the fallback rate are editable there.
 
 For recommended slider settings by universe type and risk posture, see [CALIBRATION.md](CALIBRATION.md). This document covers how each layer works; CALIBRATION.md covers what to set.
 
@@ -142,7 +142,7 @@ The IHSG benchmark (`^JKSE`) weekly history is also fetched and stored separatel
 | Field | Description |
 |-------|-------------|
 | `generated` | ISO timestamp of when the snapshot was written |
-| `riskFreeRate` | BI 7-day reverse repo rate (decimal, e.g. `0.0525`) |
+| `riskFreeRate` | Bank Indonesia BI-Rate (decimal, e.g. `0.0575`), live-fetched at snapshot time |
 | `historyRange` | `{ start, end }` of the full weekly history window |
 | `benchmark` | `{ ticker, priceHistory }` for IHSG |
 | `assets[]` | Array of per-asset objects (see below) |
@@ -294,7 +294,7 @@ The sampled price is converted to an annualized return by adding the dividend yi
 μ_i = (sampledPrice − currentPrice) / currentPrice + dividendYield
 ```
 
-Because analyst targets are 12-month forward prices, the resulting returns are directly comparable to the risk-free rate (5.25% annual) without any time-scaling.
+Because analyst targets are 12-month forward prices, the resulting returns are directly comparable to the risk-free rate (5.75% annual) without any time-scaling.
 
 ### Dispersion metric
 
@@ -311,7 +311,7 @@ This metric appears later in the Black-Litterman view uncertainty formula as a p
 | Setting | Default | Notes |
 |---------|---------|-------|
 | MC paths | 100,000 | Full scenario bank; user-adjustable 1k–100k |
-| Optimizer subsample | 1,000 | Fixed; used during hill-climbing to keep the landscape stable |
+| Optimizer subsample | 1,000 | Default; adjustable 1k–20k in the WORKSPACE panel. Used during hill-climbing to keep the landscape stable |
 | Chart subsample | 2,500 | Fixed; max points sent to Recharts for the scenario cloud |
 
 ### Scenario bank
@@ -461,7 +461,7 @@ These realized returns are sorted to compute the empirical CVaR₅%.
 
 The robust optimizer is deliberately conservative about fitting to the scenario sample:
 
-- The **optimizer** sees a fixed subsample of 1,000 paths evenly spaced from the full bank. The hill-climbing landscape is stable across function evaluations within a run.
+- The **optimizer** sees a subsample (default 1,000, adjustable 1k–20k) of paths evenly spaced from the full bank. The hill-climbing landscape is stable across function evaluations within a run.
 - The **reporting** (CVaR, P10/P50/P90 in Analytics) uses all N paths for accurate tail estimates.
 - The **tailGap** penalty is a smooth average-based measure rather than a worst-case min-max, making it less sensitive to outlier scenarios.
 - **Deterministic seed portfolios** (tangency, equal-weight, min-variance, cap-corner allocations) ensure the optimizer starts from high-quality positions before random perturbation.
@@ -578,9 +578,9 @@ The WORKSPACE tab is where you configure everything before running the simulatio
 | Vol lookback | 252 days | `VOL_LOOKBACK_DAYS` | Fixed |
 | Fallback σ_daily | 0.015 | `FALLBACK_DAILY_VOL` | Applied when fewer than 2 daily return observations are available |
 | Min corr observations | 20 | `MIN_CORR_OBS` | Auto-expands window if below |
-| Risk-free rate | 0.0525 | `DEFAULT_RF` | BI 7-day reverse repo |
+| Risk-free rate | 0.0575 | `DEFAULT_RF` | BI-Rate; live-fetched, this is the fallback |
 | MC iterations | 100,000 | `DEFAULT_MC_ITERATIONS` | Slider range 1k–100k |
-| Optimizer subsample | 1,000 | `ROBUST_SUBSAMPLE_SIZE` | Fixed; not user-adjustable |
+| Optimizer subsample | 1,000 | `ROBUST_SUBSAMPLE_SIZE` | Default; UI control 1k/5k/10k/20k |
 | Chart subsample | 2,500 | `CHART_MAX_POINTS` | Fixed; max Recharts points |
 | Tail penalty λ | 0.10 | `DEFAULT_TAIL_PENALTY` | `tailAware` mode default |
 | Turnover penalty κ | 0 | `DEFAULT_SIM_CONFIG` | Off by default |

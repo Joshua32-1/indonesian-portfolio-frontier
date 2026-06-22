@@ -61,6 +61,16 @@ const BENCHMARK_TICKER = '^JKSE';
 /** Theta-decay half-life for volatility weighting (trading days). */
 const VOL_HALF_LIFE = DEFAULT_VOL_HALF_LIFE;
 
+/** Official Bank Indonesia BI-Rate table (English page; most-recent decision first). */
+const BI_RATE_URL = 'https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx';
+
+/** Last-known BI-Rate (decimal) — used if the live fetch fails so the snapshot never breaks. */
+const BI_RATE_FALLBACK = 0.0575; // 5.75% as of 18 June 2026
+
+/** Sanity bounds for a parsed policy rate (decimal). Rejects garbage like a stray "100 %". */
+const BI_RATE_MIN = 0.01;
+const BI_RATE_MAX = 0.15;
+
 // ── Utility helpers ───────────────────────────────────────────────────────────
 
 /**
@@ -169,10 +179,53 @@ function serializePriceHistory(history) {
   return { interval: '1wk', dates, adjClose };
 }
 
+/**
+ * Live BI-Rate (decimal) scraped from Bank Indonesia's official indicator page.
+ * The EN page renders the policy-rate history as a most-recent-first table:
+ *   <td>18 June 2026</td><td>5.75 %</td>… → we take the first date+rate pair.
+ * Falls back to BI_RATE_FALLBACK on any network/parse/validation failure so the
+ * snapshot is always written.
+ * @returns {Promise<number>}
+ */
+async function fetchBIRate() {
+  try {
+    const res = await fetch(BI_RATE_URL, {
+      headers: {
+        // BI's SharePoint backend stalls on non-browser requests — send real browser headers.
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(40000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const html = await res.text();
+    const body = html.slice(html.indexOf('<tbody'));
+    // First "<date></td> <td>rate %" pair = latest decision (table is newest-first).
+    const m = body.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*<\/td>\s*<td[^>]*>\s*(\d+(?:\.\d+)?)\s*%/);
+    if (!m) throw new Error('rate cell not found in table');
+
+    const rate = parseFloat(m[2]) / 100;
+    if (!Number.isFinite(rate) || rate < BI_RATE_MIN || rate > BI_RATE_MAX) {
+      throw new Error(`parsed rate out of range: ${m[2]}%`);
+    }
+
+    console.log(`  ✅ BI-Rate ${m[2]}% (effective ${m[1]})\n`);
+    return +rate.toFixed(6);
+  } catch (err) {
+    console.warn(`  ⚠️  BI-Rate fetch failed (${err.message}); using fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}%\n`);
+    return BI_RATE_FALLBACK;
+  }
+}
+
 // ── Main extraction loop ──────────────────────────────────────────────────────
 
 async function buildSnapshot() {
   console.log('🚀  IDX Portfolio Snapshot — Yahoo Finance v3\n');
+
+  console.log('  ↳ Fetching BI-Rate (Bank Indonesia) …');
+  const riskFreeRate = await fetchBIRate();
 
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
@@ -288,7 +341,7 @@ async function buildSnapshot() {
   const snapshot = {
     generated:    new Date().toISOString(),
     description:  'IDX Large-Cap Live Snapshot — fetched from Yahoo Finance v3',
-    riskFreeRate: 0.0525, // BI 7-day reverse repo rate as of May 2026
+    riskFreeRate, // live BI-Rate scraped from Bank Indonesia (see fetchBIRate)
     historyRange: { start: FULL_HISTORY.start, end: weeklyEnd, interval: '1wk' },
     benchmark,
     assets:       assetProfiles,

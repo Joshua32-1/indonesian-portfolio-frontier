@@ -58,7 +58,7 @@ export function defaultDelta(covMatrix, capWeights, riskFreeRate) {
 }
 
 /** Equilibrium returns π = δ Σ w_mkt. */
-export function computeEquilibriumReturns(covMatrix, capWeights, { riskFreeRate = 0.0525, delta = null } = {}) {
+export function computeEquilibriumReturns(covMatrix, capWeights, { riskFreeRate = 0.0575, delta = null } = {}) {
   const d = delta ?? defaultDelta(covMatrix, capWeights, riskFreeRate);
   return matVecMul(covMatrix, capWeights).map(v => d * v);
 }

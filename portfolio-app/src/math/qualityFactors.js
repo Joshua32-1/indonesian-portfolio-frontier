@@ -12,6 +12,15 @@ import {
   computeViewUncertainty,
 } from './blackLitterman.js';
 
+/**
+ * Continuous liquidity-penalty ramp constants. The global penalty rises smoothly
+ * from ~0 and saturates at LIQ_PENALTY_CAP via 0.9·(1 − e^(−k·stress)). LIQ_PENALTY_K
+ * is chosen so the curve reproduces the legacy step anchors within ~0.02
+ * (stress 0.05→0.28, 0.10→0.48, 0.20→0.70, 0.50→0.88).
+ */
+export const LIQ_PENALTY_CAP = 0.9;   // max diagonal-inflation intensity
+export const LIQ_PENALTY_K = 7.5;     // ramp steepness in stress-ratio units
+
 function log1p(x) {
   return Math.log1p(Math.max(0, x ?? 0));
 }
@@ -154,12 +163,11 @@ export function computeQualityFactors(assets, factorConfig) {
  * Safe position = 10% of ADT × 5 trading days (standard market-impact rule).
  * Position cap for stock i = safeMaxIDR_i / portfolioSize, clamped to [2%, globalCap].
  *
- * liquidityPenalty is derived from the most-stressed name in the universe:
- *   stressRatio < 0.05  → 0.0  (no concern)
- *   0.05 – 0.10         → 0.3
- *   0.10 – 0.20         → 0.5
- *   0.20 – 0.50         → 0.7
- *   > 0.50              → 0.9
+ * liquidityPenalty is derived from the most-stressed name via a continuous
+ * saturating ramp: penalty = LIQ_PENALTY_CAP · (1 − e^(−LIQ_PENALTY_K · maxStress)).
+ * It rises smoothly from ~0 and asymptotes to 0.9, with no thresholds or cliffs.
+ * Reproduces the legacy step anchors within ~0.02 (0.05→0.28, 0.10→0.48,
+ * 0.20→0.70, 0.50→0.88) while removing the discrete jumps.
  *
  * @param {Array}  assets
  * @param {number} portfolioSize  total AUM in IDR
@@ -188,11 +196,7 @@ export function computeAutoLiquidityCaps(assets, portfolioSize, maxPositionCap =
   });
 
   const maxStress = Math.max(0, ...stressRatios.filter(r => r > 0));
-  let liquidityPenalty = 0;
-  if      (maxStress >= 0.50) liquidityPenalty = 0.9;
-  else if (maxStress >= 0.20) liquidityPenalty = 0.7;
-  else if (maxStress >= 0.10) liquidityPenalty = 0.5;
-  else if (maxStress >= 0.05) liquidityPenalty = 0.3;
+  const liquidityPenalty = LIQ_PENALTY_CAP * (1 - Math.exp(-LIQ_PENALTY_K * maxStress));
 
   return { positionCaps, liquidityPenalty, stressRatios, safeMaxIDR };
 }

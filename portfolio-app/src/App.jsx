@@ -61,7 +61,7 @@ import CorrelationExplorer from './components/CorrelationExplorer.jsx';
 const DEFAULT_MC_ITERATIONS = 100000;
 const MIN_MC_ITERATIONS     = 1000;
 const MAX_MC_ITERATIONS     = 100000;
-const DEFAULT_RF            = 0.0525;
+const DEFAULT_RF            = 0.0575;
 const MIN_RF                = 0;
 const MAX_RF                = 0.15;
 
@@ -1007,7 +1007,7 @@ function WorkspaceTab({ assets, activeSet, onToggle, sectorCaps, onSectorCapChan
               style={{ width: '100%', accentColor: '#10B981' }}
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-              {[0.03, 0.0525, 0.07, 0.10].map(v => (
+              {[0.03, 0.0575, 0.07, 0.10].map(v => (
                 <button key={v}
                   onClick={() => onRiskFreeRateChange(v)}
                   style={{ background: 'none', border: 'none', fontSize: 8, color: Math.abs(riskFreeRate - v) < 0.001 ? '#10B981' : '#1E3A5F', cursor: 'pointer', fontFamily: 'monospace', fontWeight: 700, padding: '2px 4px' }}
