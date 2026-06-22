@@ -1,0 +1,38 @@
+---
+name: rebalance-portfolio
+description: Append a new dated rebalance entry to live-dashboard-portfolio/data/portfolios.json — the optimizer→dashboard handoff. Use after a REGENERATE run when moving chosen weights into the live tracker. Enforces the append-only, weights-sum-to-1, bare-ticker contract.
+---
+
+# Rebalance portfolio
+
+Moves chosen weights from the optimizer into the dashboard's tracked history. The dashboard stitches a continuous index, so **history is append-only** — never overwrite past entries.
+
+## Inputs you need
+
+- The strategy `id` (one of: `max-sharpe`, `min-var`, `tail-10`, `tail-20`, `tail-35`, `tail-50`, or a new one).
+- The effective date (`YYYY-MM-DD`) the weights take effect.
+- The weight map, read from the optimizer's **Analytics** tab.
+
+## Procedure
+
+1. Open `live-dashboard-portfolio/data/portfolios.json`.
+2. Find the portfolio object with the matching `id`. **Append** to its `rebalances[]`:
+   ```json
+   { "effective": "2026-06-22", "weights": { "BBCA": 0.09, "BBRI": 0.06, "...": 0.0 } }
+   ```
+   Do **not** edit or remove existing rebalance rows.
+3. Bump the top-level `"updated"` to today.
+
+## Validate before saving (hard requirements — see API.md)
+
+- **Weights sum to ≈ 1.00** (within ~0.005). Quick check:
+  ```bash
+  node -e "const p=require('./live-dashboard-portfolio/data/portfolios.json'); for(const x of p.portfolios){const r=x.rebalances.at(-1); const s=Object.values(r.weights).reduce((a,b)=>a+b,0); console.log(x.id, r.effective, s.toFixed(4))}"
+  ```
+- **Tickers are bare symbols** (`BBCA`, not `BBCA.JK`) and **every ticker exists** in `live-dashboard-portfolio/data/live-market-snapshot.json` assets.
+- `rebalances[]` stays sorted ascending by `effective`.
+- New strategy? Also add a colour entry in `live-dashboard-portfolio/src/App.jsx` `COLORS`.
+
+## Finish
+
+Commit and push (only when the user asks) → Vercel auto-redeploys. The chart's past values won't change; only the future slope from `effective` onward.

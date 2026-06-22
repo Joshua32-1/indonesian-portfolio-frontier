@@ -1,0 +1,38 @@
+---
+name: add-ticker
+description: Add or remove an IDX ticker consistently across the optimizer's TICKERS list, the regenerated snapshot, and downstream sector/position-cap defaults. Use when changing the investable universe. Keeps the optimizer and dashboard ticker namespaces consistent.
+---
+
+# Add / remove a ticker
+
+The investable universe is defined in one place but ripples through snapshots, sectors, and (for the dashboard) `portfolios.json`. Do all steps or the apps drift.
+
+## 1. Edit the source list
+
+`portfolio-app/data/fetch-snapshot.js` → the `TICKERS` array. Use the Yahoo `.JK` suffix, e.g. `'GOTO.JK'`. (Currently 25 tickers, `BBCA.JK … ISAT.JK`.)
+
+## 2. Regenerate the optimizer snapshot
+
+```bash
+cd portfolio-app && npm run fetch-snapshot
+```
+
+Confirm the new ticker came back with `meta` + `forwardEstimates` (some thin names lack analyst targets — Yahoo may omit `forwardEstimates`; the engine tolerates this but the name will have weak views). Check its `sector` label is sensible; run `npm run refresh-sectors` if it landed as `Other`.
+
+## 3. Sanity-check downstream
+
+- **Sector caps:** a new sector auto-initializes to `DEFAULT_SECTOR_CAP` (0.80). If the addition concentrates a sector, reconsider caps (see `CALIBRATION.md`).
+- **Validation:** `node scripts/validate-factors.mjs` runs clean with the new universe.
+
+## 4. Dashboard side (only if the ticker enters a tracked portfolio)
+
+- The dashboard's lean snapshot is fetched independently — its ticker set comes from its own `fetch-daily-snapshot.mjs`. Ensure the new bare symbol (`GOTO`) is available there too if you'll track it.
+- When you add the ticker to a strategy's weights in `portfolios.json`, use the **bare** symbol and re-validate sums (see the `rebalance-portfolio` skill).
+
+## Removing a ticker
+
+Delete it from `TICKERS`, regenerate, and **remove it from any `portfolios.json` weights** (re-normalize the remaining weights to sum to 1). Past rebalance rows that reference a now-missing ticker will simply contribute 0 if the asset is absent from the snapshot, but it's cleaner to fix forward-looking entries.
+
+## Validate
+
+After any change: snapshot regenerated, `validate-factors.mjs` clean, `portfolios.json` weights still sum to ≈ 1.00, no `.JK` suffixes leaked into `portfolios.json`.
