@@ -74,6 +74,3 @@ jobs:
             See [`FORWARD-TEST.md`](../blob/main/FORWARD-TEST.md) for the protocol.
 
             🤖 Generated with [Claude Code](https://claude.com/claude-code)
-          labels: |
-            rebalance
-            automated
