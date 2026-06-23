@@ -13,7 +13,7 @@ import {
   buildIHSGSeries,
   mergeChartRows,
   sinceInceptionReturn,
-  latestWeights,
+  weightsAtDate,
   latestRebalanceDate,
   extractDailyReturns,
   calcAnnualizedReturn,
@@ -226,6 +226,7 @@ export default function App() {
   const [portfoliosData, setPortfoliosData] = useState(null);
   const [error, setError]           = useState(null);
   const [visible, setVisible]       = useState(null); // set after data loads
+  const [weightDate, setWeightDate] = useState(null); // null → resolves to latest rebalance date
 
   // Load both JSON files
   useEffect(() => {
@@ -250,7 +251,7 @@ export default function App() {
   }, []);
 
   // Build chart data and forward-test metrics
-  const { chartRows, metrics, weightRows, portfolios, allTickers } = useMemo(() => {
+  const { chartRows, metrics, portfolios, allTickers, rebalanceDates } = useMemo(() => {
     if (!snapshot || !portfoliosData) return {};
 
     const assets       = snapshot.assets ?? [];
@@ -328,19 +329,32 @@ export default function App() {
       };
     }
 
-    // Weight table: all tickers across all latest weight sets
+    // Weight table: union of all tickers across every rebalance (stable across dates)
     const allTickers = [...new Set(
-      portfolios.flatMap(p => Object.keys(latestWeights(p)))
+      portfolios.flatMap(p => (p.rebalances ?? []).flatMap(r => Object.keys(r.weights ?? {})))
     )].sort();
 
-    const weightRows = allTickers.map(ticker => {
+    // All rebalance dates across every strategy, newest first (drives the date selector)
+    const rebalanceDates = [...new Set(
+      portfolios.flatMap(p => (p.rebalances ?? []).map(r => r.effective))
+    )].sort((a, b) => (a < b ? 1 : -1));
+
+    return { chartRows, metrics, portfolios, allTickers, rebalanceDates };
+  }, [snapshot, portfoliosData]);
+
+  // Date-aware weight rows: weights active on the selected rebalance date (default latest)
+  const activeWeightDate = weightDate ?? rebalanceDates?.[0] ?? null;
+  const weightRows = useMemo(() => {
+    if (!portfolios?.length || !activeWeightDate) return [];
+    return allTickers.map(ticker => {
       const row = { ticker };
-      for (const p of portfolios) row[p.id] = (latestWeights(p)[ticker] ?? 0) * 100;
+      for (const p of portfolios) {
+        const w = weightsAtDate(p.rebalances, activeWeightDate);
+        row[p.id] = (w[ticker] ?? 0) * 100;
+      }
       return row;
     });
-
-    return { chartRows, metrics, weightRows, portfolios, allTickers };
-  }, [snapshot, portfoliosData]);
+  }, [portfolios, allTickers, activeWeightDate]);
 
   function toggleLine(id) {
     setVisible(prev => {
@@ -567,8 +581,23 @@ export default function App() {
 
       {/* ── Weight matrix ───────────────────────────────────────────────── */}
       <div style={s.panel}>
-        <div style={s.sectionLabel}>
-          Portfolio Weights — latest rebalance per strategy
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div style={s.sectionLabel}>Portfolio Weights</div>
+          {(rebalanceDates?.length ?? 0) > 1 && (
+            <label style={{ fontSize: 9, color: TEXT_DIM, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+              REBALANCE
+              <select
+                value={activeWeightDate ?? ''}
+                onChange={e => setWeightDate(e.target.value)}
+                style={{
+                  background: '#0A1628', color: TEXT_MED, border: `1px solid ${BORDER}`,
+                  borderRadius: 4, padding: '3px 6px', fontSize: 10, fontFamily: 'monospace', cursor: 'pointer',
+                }}
+              >
+                {rebalanceDates.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
+          )}
         </div>
 
         {!weightRows?.length ? (
@@ -624,11 +653,8 @@ export default function App() {
               </table>
             </div>
             <div style={{ marginTop: 10, fontSize: 9, color: TEXT_DIM }}>
-              Weights as of{' '}
-              {(portfolios ?? []).map(p => {
-                const d = latestRebalanceDate(p.rebalances);
-                return <span key={p.id} style={{ marginRight: 12, color: COLORS[p.id] ?? TEXT_DIM }}>{p.label}: {d ?? '—'}</span>;
-              })}
+              Showing weights active on <span style={{ color: TEXT_MED }}>{activeWeightDate ?? '—'}</span>.
+              Each strategy reflects its most recent rebalance on or before this date.
             </div>
           </>
         )}
