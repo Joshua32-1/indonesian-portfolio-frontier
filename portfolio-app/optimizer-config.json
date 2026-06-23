@@ -1,0 +1,38 @@
+{
+  "_comment": "Config for the headless weekly optimizer (scripts/optimize.mjs). Mirrors the browser Workspace/Simulation defaults so automated runs match the UI. Edit here to change methodology for ALL future automated rebalances. Each weekly run opens a PR for human review before anything reaches production.",
+
+  "mcIterations": 100000,
+  "maxPositionCap": 1.0,
+  "volHalfLife": 63,
+
+  "corrStart": "1900-01-01",
+  "corrEnd": "2100-01-01",
+  "_corrNote": "Full price history (matches the UI 'Max range' default). Narrow this to e.g. '2021-01-01'/'2025-12-31' to weight recent correlation structure.",
+
+  "sectorCaps": null,
+  "_sectorCapsNote": "null = default 80% cap per sector (DEFAULT_SECTOR_CAP). Override with e.g. {\"Banks\": 0.5}.",
+
+  "factorConfig": {
+    "useFactorModel": false,
+    "useBlackLitterman": true,
+    "useCapPrior": true,
+    "useAnalystViews": true,
+    "tau": 0.03,
+    "analystConfidence": 0.7,
+    "dispersionOmega": 0.8,
+    "largeCapBias": 0.25,
+    "useLiquidityRisk": true,
+    "portfolioSize": 0
+  },
+  "_factorNote": "useFactorModel:false = legacy PERT consensus (current tracked behavior). Set true to activate the Black-Litterman factor model that anchors analyst targets toward cap-weight equilibrium. Changing this mid-forward-test changes methodology — do it deliberately and note it in FORWARD-TEST.md.",
+
+  "simConfig": {
+    "robustMode": "tailAware",
+    "tailPenalty": 0.10,
+    "turnoverPenalty": 0,
+    "shrinkage": true,
+    "optimizerPaths": 10000,
+    "deterministicStarts": true
+  },
+  "_simNote": "Runtime is ~linear in optimizerPaths (~0.47s/path at 100k iterations on a GitHub runner): 1000≈8min, 3000≈23min, 10000≈80min. 10000 favors tail-estimate precision over speed; drop to 2000-3000 if a faster weekly run is preferred. mcIterations affects scenario diversity, not runtime materially."
+}

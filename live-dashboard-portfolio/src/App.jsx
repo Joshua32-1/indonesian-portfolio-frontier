@@ -15,6 +15,13 @@ import {
   sinceInceptionReturn,
   latestWeights,
   latestRebalanceDate,
+  extractDailyReturns,
+  calcAnnualizedReturn,
+  calcAnnualizedVol,
+  calcMaxDrawdown,
+  calcSharpe,
+  calcTrackingError,
+  calcInfoRatio,
 } from './math/portfolioIndex.js';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -182,6 +189,11 @@ function fmtTs(iso) {
   return new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function fmtRatio(val) {
+  if (val == null || !isFinite(val)) return '—';
+  return val.toFixed(2);
+}
+
 // ── Chart tooltip ─────────────────────────────────────────────────────────────
 
 function ChartTooltip({ active, payload, label }) {
@@ -237,14 +249,15 @@ export default function App() {
       .catch(err => setError(err.message));
   }, []);
 
-  // Build chart data
-  const { chartRows, kpis, weightRows, portfolios, allTickers } = useMemo(() => {
+  // Build chart data and forward-test metrics
+  const { chartRows, metrics, weightRows, portfolios, allTickers } = useMemo(() => {
     if (!snapshot || !portfoliosData) return {};
 
-    const assets    = snapshot.assets ?? [];
-    const benchmark = snapshot.benchmark?.priceHistory ?? null;
-    const inception = portfoliosData.inception;
-    const portfolios = portfoliosData.portfolios ?? [];
+    const assets       = snapshot.assets ?? [];
+    const benchmark    = snapshot.benchmark?.priceHistory ?? null;
+    const inception    = portfoliosData.inception;
+    const portfolios   = portfoliosData.portfolios ?? [];
+    const riskFreeRate = portfoliosData.riskFreeRate ?? 0.0575;
 
     // IHSG series
     const ihsgSeries = buildIHSGSeries(benchmark, inception);
@@ -262,11 +275,58 @@ export default function App() {
     ];
     const chartRows = mergeChartRows(allSeries);
 
-    // KPIs
-    const kpis = {
-      IHSG: sinceInceptionReturn(ihsgSeries),
-      ...Object.fromEntries(portfolios.map(p => [p.id, sinceInceptionReturn(portSeriesMap[p.id] ?? [])])),
+    // Date-keyed IHSG returns for tracking error alignment
+    const ihsgRetByDate = new Map();
+    for (const row of ihsgSeries) {
+      if (row.rp !== undefined) ihsgRetByDate.set(row.date, row.rp);
+    }
+
+    // Returns aligned by date (portfolio series and IHSG may have different date sets)
+    function alignedPortBench(portSeries) {
+      const portRets = [], benchRets = [];
+      for (const row of portSeries.slice(1)) {
+        const br = ihsgRetByDate.get(row.date);
+        if (br !== undefined) { portRets.push(row.rp); benchRets.push(br); }
+      }
+      return { portRets, benchRets };
+    }
+
+    // Compute metrics for IHSG baseline
+    const ihsgDailyRets = extractDailyReturns(ihsgSeries);
+    const ihsgAnnRet    = calcAnnualizedReturn(ihsgSeries);
+    const ihsgAnnVol    = calcAnnualizedVol(ihsgDailyRets);
+
+    const metrics = {
+      IHSG: {
+        totalReturn:   sinceInceptionReturn(ihsgSeries),
+        annReturn:     ihsgAnnRet,
+        annVol:        ihsgAnnVol,
+        maxDrawdown:   calcMaxDrawdown(ihsgSeries),
+        sharpe:        null,
+        trackingError: null,
+        infoRatio:     null,
+      },
     };
+
+    // Compute metrics for each portfolio
+    for (const port of portfolios) {
+      const series    = portSeriesMap[port.id] ?? [];
+      const dailyRets = extractDailyReturns(series);
+      const annRet    = calcAnnualizedReturn(series);
+      const annVol    = calcAnnualizedVol(dailyRets);
+      const { portRets, benchRets } = alignedPortBench(series);
+      const te        = calcTrackingError(portRets, benchRets);
+      const excess    = annRet != null && ihsgAnnRet != null ? annRet - ihsgAnnRet : null;
+      metrics[port.id] = {
+        totalReturn:   sinceInceptionReturn(series),
+        annReturn:     annRet,
+        annVol,
+        maxDrawdown:   calcMaxDrawdown(series),
+        sharpe:        calcSharpe(annRet, annVol, riskFreeRate),
+        trackingError: te,
+        infoRatio:     calcInfoRatio(excess, te),
+      };
+    }
 
     // Weight table: all tickers across all latest weight sets
     const allTickers = [...new Set(
@@ -279,7 +339,7 @@ export default function App() {
       return row;
     });
 
-    return { chartRows, kpis, weightRows, portfolios, allTickers };
+    return { chartRows, metrics, weightRows, portfolios, allTickers };
   }, [snapshot, portfoliosData]);
 
   function toggleLine(id) {
@@ -348,42 +408,75 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── KPI strip ───────────────────────────────────────────────────── */}
+      {/* ── Performance metrics table ────────────────────────────────── */}
       <div style={s.panel}>
-        <div style={s.sectionLabel}>Since Inception · Total Return</div>
-        <div style={s.kpiRow}>
+        <div style={s.sectionLabel}>Performance Metrics · Since Inception</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={s.table}>
+            <thead>
+              <tr>
+                <th style={s.thLeft}>Strategy</th>
+                <th style={s.th}>Total Return</th>
+                <th style={s.th}>Ann. Return</th>
+                <th style={s.th}>Ann. Vol</th>
+                <th style={s.th}>Sharpe</th>
+                <th style={s.th}>Max DD</th>
+                <th style={s.th}>Tracking Error</th>
+                <th style={s.th}>Info Ratio</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* IHSG benchmark row */}
+              {(() => {
+                const m = metrics?.['IHSG'];
+                return (
+                  <tr>
+                    <td style={s.tdLeft}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={s.dot(COLORS.IHSG)} />
+                        IHSG
+                        <span style={{ color: TEXT_DIM, fontWeight: 400, fontSize: 9 }}>Benchmark</span>
+                      </span>
+                    </td>
+                    <td style={{ ...s.td(false), color: m?.totalReturn > 0 ? '#00FF88' : m?.totalReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.totalReturn)}</td>
+                    <td style={{ ...s.td(false), color: m?.annReturn > 0 ? '#00FF88' : m?.annReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.annReturn)}</td>
+                    <td style={s.td(false)}>{fmtPct(m?.annVol, false)}</td>
+                    <td style={s.td(false)}>—</td>
+                    <td style={{ ...s.td(false), color: m?.maxDrawdown < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.maxDrawdown, false)}</td>
+                    <td style={s.td(false)}>—</td>
+                    <td style={s.td(false)}>—</td>
+                  </tr>
+                );
+              })()}
 
-          {/* IHSG */}
-          {(() => {
-            const ret = kpis?.['IHSG'];
-            return (
-              <div style={s.kpiCard(COLORS.IHSG, visible?.has('IHSG'))}>
-                <div style={s.kpiLabel(COLORS.IHSG)}>IHSG</div>
-                <div style={s.kpiValue}>{fmtPct(ret)}</div>
-                <div style={s.kpiSub}>Benchmark</div>
-              </div>
-            );
-          })()}
-
-          {(portfolios ?? []).map(p => {
-            const ret  = kpis?.[p.id];
-            const ihsg = kpis?.['IHSG'];
-            const active = ret != null && ihsg != null ? ret - ihsg : null;
-            const col  = COLORS[p.id] ?? '#64748B';
-            const isPos = active != null && active > 0;
-            return (
-              <div key={p.id} style={s.kpiCard(col, visible?.has(p.id))}>
-                <div style={s.kpiLabel(col)}>{p.label}</div>
-                <div style={s.kpiValue}>{fmtPct(ret)}</div>
-                <div style={s.kpiSub}>
-                  Active:{' '}
-                  <span style={{ color: isPos ? '#00FF88' : active != null && active < 0 ? '#EF4444' : TEXT_DIM }}>
-                    {fmtPct(active)}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+              {/* Portfolio rows */}
+              {(portfolios ?? []).map(p => {
+                const m   = metrics?.[p.id];
+                const col = COLORS[p.id] ?? '#64748B';
+                return (
+                  <tr key={p.id}>
+                    <td style={s.tdLeft}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={s.dot(col)} />
+                        {p.label}
+                      </span>
+                    </td>
+                    <td style={{ ...s.td(false), color: m?.totalReturn > 0 ? '#00FF88' : m?.totalReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.totalReturn)}</td>
+                    <td style={{ ...s.td(false), color: m?.annReturn > 0 ? '#00FF88' : m?.annReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.annReturn)}</td>
+                    <td style={s.td(false)}>{fmtPct(m?.annVol, false)}</td>
+                    <td style={{ ...s.td(false), color: m?.sharpe > 0 ? '#00FF88' : m?.sharpe < 0 ? '#EF4444' : TEXT_MED, fontWeight: m?.sharpe > 1 ? 700 : 400 }}>{fmtRatio(m?.sharpe)}</td>
+                    <td style={{ ...s.td(false), color: m?.maxDrawdown < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.maxDrawdown, false)}</td>
+                    <td style={s.td(false)}>{fmtPct(m?.trackingError, false)}</td>
+                    <td style={{ ...s.td(false), color: m?.infoRatio > 0 ? '#00FF88' : m?.infoRatio < 0 ? '#EF4444' : TEXT_MED, fontWeight: m?.infoRatio > 0.5 ? 700 : 400 }}>{fmtRatio(m?.infoRatio)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 9, color: TEXT_DIM }}>
+          Sharpe = (ann. return − {((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}% BI-Rate) / ann. vol ·
+          Annualized metrics are volatile at short horizons; stabilize ~63 trading days from inception.
         </div>
       </div>
 
