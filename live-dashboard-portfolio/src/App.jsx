@@ -23,6 +23,9 @@ import {
   calcTrackingError,
   calcInfoRatio,
 } from './math/portfolioIndex.js';
+import { buildLiveAttribution } from './math/attribution.js';
+import WeightsHistoryChart from './components/WeightsHistoryChart.jsx';
+import AttributionTable    from './components/AttributionTable.jsx';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -227,6 +230,7 @@ export default function App() {
   const [error, setError]           = useState(null);
   const [visible, setVisible]       = useState(null); // set after data loads
   const [weightDate, setWeightDate] = useState(null); // null → resolves to latest rebalance date
+  const [attrPortfolio, setAttrPortfolio] = useState(null); // null → first strategy
 
   // Load both JSON files
   useEffect(() => {
@@ -355,6 +359,14 @@ export default function App() {
       return row;
     });
   }, [portfolios, allTickers, activeWeightDate]);
+
+  // Attribution: per-asset return + risk contribution for the selected strategy
+  const activeAttrId = attrPortfolio ?? portfolios?.[0]?.id ?? null;
+  const attribution = useMemo(() => {
+    if (!portfolios?.length || !snapshot?.assets || !activeAttrId || !portfoliosData?.inception) return null;
+    const p = portfolios.find(p => p.id === activeAttrId) ?? portfolios[0];
+    return buildLiveAttribution(p, snapshot.assets, portfoliosData.inception);
+  }, [portfolios, snapshot, portfoliosData?.inception, activeAttrId]);
 
   function toggleLine(id) {
     setVisible(prev => {
@@ -656,6 +668,57 @@ export default function App() {
               Showing weights active on <span style={{ color: TEXT_MED }}>{activeWeightDate ?? '—'}</span>.
               Each strategy reflects its most recent rebalance on or before this date.
             </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Rebalance History & Attribution ─────────────────────────────── */}
+      <div style={s.panel}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+          <span style={s.sectionLabel}>REBALANCE HISTORY & ATTRIBUTION</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {(portfolios ?? []).map(p => (
+              <button
+                key={p.id}
+                onClick={() => setAttrPortfolio(p.id)}
+                style={{
+                  background:    activeAttrId === p.id ? (COLORS[p.id] ?? '#64748B') : 'transparent',
+                  color:         activeAttrId === p.id ? '#05080F' : (COLORS[p.id] ?? TEXT_DIM),
+                  border:        `1px solid ${COLORS[p.id] ?? BORDER}`,
+                  borderRadius:  4,
+                  padding:       '2px 8px',
+                  fontSize:      9,
+                  fontFamily:    'inherit',
+                  cursor:        'pointer',
+                  letterSpacing: 0.5,
+                }}
+              >
+                {p.id}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {(attribution?.weightRows?.length ?? 0) < 2 ? (
+          <div style={{ color: TEXT_DIM, fontSize: 10, padding: '12px 0' }}>
+            Attribution view requires 2 or more rebalance periods.
+            Check back after the first weekly rebalance on 2026-06-29.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 9, color: TEXT_DIM, marginBottom: 8 }}>
+              Weight path across {attribution.weightRows.length} rebalances (top 12 names; rest = "Other").
+            </div>
+            <WeightsHistoryChart
+              weightRows={attribution.weightRows}
+              order={attribution.order}
+            />
+            <div style={{ fontSize: 9, color: TEXT_DIM, margin: '10px 0 6px' }}>
+              Return contribution is Carino-linked (sums to{' '}
+              <span style={{ color: TEXT_MED }}>{attribution.totalReturn != null ? `${(attribution.totalReturn * 100).toFixed(1)}%` : '—'}</span>
+              {' '}total return); risk contribution = Cov(w_f, r_p)/Var(r_p), realized (sums to 100%).
+            </div>
+            <AttributionTable rows={attribution.rows} />
           </>
         )}
       </div>
