@@ -22,7 +22,9 @@ permissions:
 jobs:
   rebalance:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # ~80 min for the optimizer at 100k iterations / 10k optimizer paths, plus
+    # snapshot fetch + npm ci. Lower this if optimizerPaths is reduced in config.
+    timeout-minutes: 120
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4

@@ -31,7 +31,8 @@
     "tailPenalty": 0.10,
     "turnoverPenalty": 0,
     "shrinkage": true,
-    "optimizerPaths": 1000,
+    "optimizerPaths": 10000,
     "deterministicStarts": true
-  }
+  },
+  "_simNote": "Runtime is ~linear in optimizerPaths (~0.47s/path at 100k iterations on a GitHub runner): 1000≈8min, 3000≈23min, 10000≈80min. 10000 favors tail-estimate precision over speed; drop to 2000-3000 if a faster weekly run is preferred. mcIterations affects scenario diversity, not runtime materially."
 }
