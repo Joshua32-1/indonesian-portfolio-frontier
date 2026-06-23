@@ -22,36 +22,54 @@ This is a genuine **out-of-sample** test — the optimizer was built and calibra
 
 ---
 
-## Rebalance protocol — every Monday
+## Rebalance protocol — automated, every Monday
 
-Every Monday (or the first IDX trading day of the week), run:
+Rebalances run **automatically** — no local optimizer run needed.
+
+[`.github/workflows/weekly-rebalance.yml`](.github/workflows/weekly-rebalance.yml)
+runs Mondays at 12:00 UTC (19:00 WIB) and:
+
+1. Fetches a fresh optimizer snapshot (Yahoo prices, analyst targets, BI-Rate).
+2. Runs [`portfolio-app/scripts/optimize.mjs`](portfolio-app/scripts/optimize.mjs)
+   — the same math as the browser Analytics tab, headless — and **appends** a new
+   dated rebalance to each of the six strategies in `portfolios.json`.
+3. **Opens a PR** titled *"Weekly rebalance — review new weights"*.
+
+Nothing reaches production until **you merge the PR**. Merging triggers the Vercel
+redeploy; past index values never change — only the slope from the new `effective`
+date forward.
+
+### Reviewing a rebalance PR
+
+- Read the weight diff per strategy. Large unexplained swings warrant a look at the
+  snapshot (a data glitch or a stale analyst target).
+- The script enforces weights sum to ≈1.00 and that every ticker exists in the
+  dashboard snapshot, failing the job otherwise — so a green PR is already validated.
+- **Merge** to accept, or **close** to skip that week. History stays append-only
+  either way (a skipped week simply carries the prior weights forward).
+
+### Tuning methodology
+
+All knobs live in
+[`portfolio-app/optimizer-config.json`](portfolio-app/optimizer-config.json) — MC
+iterations, correlation window, sector caps, tail penalty, and the Black-Litterman
+factor model. Editing it changes **all future** automated runs. Per the guardrails
+below, changing methodology mid-test is deliberate: note it in this doc when you do.
+
+### Manual / local run
+
+Trigger from the GitHub Actions UI (*Run workflow* → optional `effective` date), or
+locally to preview:
 
 ```bash
-# 1. Refresh live prices for the dashboard (CI also does this automatically)
-cd live-dashboard-portfolio
+cd portfolio-app
 npm run fetch-snapshot
-
-# 2. Re-run the optimizer locally to get fresh weights
-cd ../portfolio-app
-npm run dev
-# → browser opens at http://localhost:5173
-# → Simulation tab → click REGENERATE (100k paths, default calibration)
-# → Analytics tab → read weights for each strategy variant
+node scripts/optimize.mjs --dry-run                          # full-fidelity preview, no write
+node scripts/optimize.mjs --dry-run --iterations 2000 --paths 100   # fast smoke test
 ```
 
-Then decide whether to rebalance. **Threshold**: rebalance if any strategy's largest-weight ticker changed by ≥ 5 percentage points vs. the prior week. Small drift doesn't justify turnover.
-
-```bash
-# 3. If rebalancing: append new entries to portfolios.json
-#    Use the /rebalance-portfolio skill or append manually.
-#    Rules: append only (never overwrite); effective = today's date; weights sum to ~1.00
-
-# 4. Commit and push
-git add live-dashboard-portfolio/data/portfolios.json
-git commit -m "rebalance: $(date +%Y-%m-%d) weekly"
-git push
-# → Vercel auto-redeploys; check dashboard for updated metrics
-```
+`optimize.mjs` flags: `--effective YYYY-MM-DD`, `--dry-run`, `--iterations N`,
+`--paths N` (the last two override config for CI tuning / fast tests).
 
 ---
 
@@ -105,7 +123,7 @@ These rules protect the integrity of the out-of-sample test:
 - **Never edit past rebalances** — the `rebalances[]` array is append-only. The dashboard's stitched index depends on this invariant.
 - **Don't change the inception date** — `portfolios.json → inception: 2026-06-08` is fixed for the life of this test.
 - **Don't change the λ values mid-test** — the 6 strategy variants (max-sharpe, min-var, tail-10/20/35/50) must remain fixed so the comparison is clean.
-- **Don't retrain the model on post-inception data** — calibration (CALIBRATION.md) is frozen at inception. Use only the default settings when regenerating weekly weights.
+- **Don't retrain the model on post-inception data** — calibration (CALIBRATION.md) is frozen at inception. Methodology changes go through `optimizer-config.json` and must be recorded here.
 
 ---
 
@@ -115,8 +133,9 @@ These rules protect the integrity of the out-of-sample test:
 Inception:      2026-06-08
 Strategies:     max-sharpe, min-var, tail-10, tail-20, tail-35, tail-50
 BI-Rate (rf):   5.75% (portfolios.json → riskFreeRate: 0.0575)
-Rebalance:      Weekly, each Monday
+Rebalance:      Automated weekly PR, Mondays 12:00 UTC via .github/workflows/weekly-rebalance.yml
 CI snapshot:    Weekdays 11:00 UTC (18:00 WIB) via .github/workflows/refresh-dashboard.yml
+Optimizer cfg:  portfolio-app/optimizer-config.json · scripts/optimize.mjs
 3-month check:  2026-09-08
 12-month verdict: 2027-06-08
 Primary metric: Sharpe ratio (H1)

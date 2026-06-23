@@ -1,0 +1,77 @@
+name: Weekly Rebalance PR
+
+# Re-runs the optimizer headlessly every Monday and opens a PR with the new
+# portfolios.json weights for human review. Nothing reaches production until the
+# PR is merged (which triggers the Vercel redeploy).
+
+on:
+  # Mondays 12:00 UTC = 19:00 WIB — after the daily snapshot refresh (11:00 UTC)
+  schedule:
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
+    inputs:
+      effective:
+        description: 'Effective date (YYYY-MM-DD). Blank = today (the run date).'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  rebalance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: portfolio-app/package-lock.json
+
+      - name: Install optimizer deps
+        working-directory: portfolio-app
+        run: npm ci
+
+      - name: Fetch fresh optimizer snapshot (Yahoo + BI-Rate)
+        working-directory: portfolio-app
+        run: npm run fetch-snapshot
+        env:
+          NODE_OPTIONS: '--max-old-space-size=2048'
+
+      - name: Run optimizer → append rebalances to portfolios.json
+        working-directory: portfolio-app
+        run: node scripts/optimize.mjs
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+          REBALANCE_EFFECTIVE: ${{ github.event.inputs.effective }}
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          # Only the weights file — the regenerated rich snapshot stays on the runner.
+          add-paths: live-dashboard-portfolio/data/portfolios.json
+          branch: auto/weekly-rebalance
+          delete-branch: true
+          commit-message: 'chore: weekly rebalance weights'
+          title: 'Weekly rebalance — review new weights'
+          body: |
+            Automated weekly rebalance produced by `portfolio-app/scripts/optimize.mjs`.
+
+            **Review before merging:**
+            - Check the weight diff per strategy below.
+            - Confirm each strategy's weights still sum to ~1.00 (the script enforces this).
+            - Merging redeploys the Vercel dashboard with the new `effective` weights.
+
+            Methodology is controlled by `portfolio-app/optimizer-config.json`.
+            See [`FORWARD-TEST.md`](../blob/main/FORWARD-TEST.md) for the protocol.
+
+            🤖 Generated with [Claude Code](https://claude.com/claude-code)
+          labels: |
+            rebalance
+            automated
