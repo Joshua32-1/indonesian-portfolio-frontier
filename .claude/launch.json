@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backtest",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "backtest-portfolio"],
+      "port": 5174,
+      "autoPort": false
+    }
+  ]
+}

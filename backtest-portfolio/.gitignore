@@ -1,0 +1,6 @@
+node_modules
+dist
+.DS_Store
+
+# Regenerable market data — rebuild with `npm run fetch` (can be several MB).
+public/backtest-history.json

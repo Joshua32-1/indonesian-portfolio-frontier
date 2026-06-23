@@ -518,7 +518,7 @@ function buildRobustChartCloud(scenarios, weights, covMatrix, riskFreeRate, maxP
   });
 }
 
-function findMinVariancePortfolio(covMatrix, assets, { sectorCaps, maxPositionCap, positionCaps }, deterministicStarts = false) {
+export function findMinVariancePortfolio(covMatrix, assets, { sectorCaps, maxPositionCap, positionCaps }, deterministicStarts = false) {
   const n = assets.length;
   const constraintOpts = buildConstraintOpts(sectorCaps, maxPositionCap, positionCaps);
 
