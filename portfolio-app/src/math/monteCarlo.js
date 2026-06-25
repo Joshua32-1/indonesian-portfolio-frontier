@@ -309,6 +309,8 @@ function findRobustPortfolio(scenarios, covMatrix, assets, opts) {
     randomRestarts = 32,
     startWeights = null,
     deterministicStarts = false,
+    optimizeMaxIter = 100,
+    optimizeStep = 0.01,
   } = opts;
 
   const constraintOpts = buildConstraintOpts(sectorCaps, maxPositionCap, positionCaps);
@@ -349,7 +351,7 @@ function findRobustPortfolio(scenarios, covMatrix, assets, opts) {
   const restarts = deterministicStarts ? 0 : randomRestarts;
 
   const { weights, score } = optimizePortfolio(objective, assets, constraintOpts, seed, {
-    maxIter: 100, step: 0.01, randomRestarts: restarts,
+    maxIter: optimizeMaxIter, step: optimizeStep, randomRestarts: restarts,
     extraStarts,
   });
 
@@ -357,6 +359,30 @@ function findRobustPortfolio(scenarios, covMatrix, assets, opts) {
   const fullAvgMeans = averageScenarioMeans(scenarios);
   const metrics = portfolioMetrics(weights, fullAvgMeans, covMatrix, riskFreeRate);
   return { weights, avgMeans: fullAvgMeans, portfolioSharpe: metrics.portfolioSharpe };
+}
+
+/**
+ * Walk-forward-friendly entry point to the production tail-aware robust optimizer.
+ *
+ * A thin, side-effect-free wrapper over findRobustPortfolio so external callers
+ * (notably the backtest engine) reuse the EXACT production objective —
+ *   Sharpe(avgMeans) − λ·(tailGap/σ_ref) − κ·turnover
+ * — rather than re-implementing it. Pure: data in, weights out.
+ *
+ * For a machinery-only backtest (no analyst views), pass `scenarios` as nPaths
+ * copies of the equilibrium prior μ_eq; avgMeans then collapses to μ_eq and the
+ * tail term is driven purely by Σ through correlated lognormal realization shocks.
+ *
+ * @param {number[][]} scenarios  per-path mean-return vectors (length n each)
+ * @param {number[][]} covMatrix
+ * @param {Asset[]}    assets
+ * @param {object}     opts  { sectorCaps, maxPositionCap, positionCaps, riskFreeRate,
+ *                             robustMode, tailPenalty, currentWeights, turnoverPenalty,
+ *                             deterministicStarts, randomRestarts }
+ * @returns {{ weights:number[], avgMeans:number[], portfolioSharpe:number }}
+ */
+export function optimizeTailAware(scenarios, covMatrix, assets, opts) {
+  return findRobustPortfolio(scenarios, covMatrix, assets, opts);
 }
 
 /**
