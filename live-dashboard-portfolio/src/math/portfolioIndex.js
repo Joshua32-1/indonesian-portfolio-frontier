@@ -81,7 +81,7 @@ export function buildTrackerSeries(portfolio, assets, benchmarkHistory, inceptio
   for (let t = 0; t < aligned.length; t++) {
     const row = aligned[t];
     if (t === 0) {
-      result.push({ date: row.date, value: 100 });
+      result.push({ date: row.date, value: 100, rp: 0 });
       continue;
     }
     const prevRow = aligned[t - 1];
@@ -98,7 +98,7 @@ export function buildTrackerSeries(portfolio, assets, benchmarkHistory, inceptio
     }
 
     idx *= Math.exp(rp);
-    result.push({ date: row.date, value: +idx.toFixed(4) });
+    result.push({ date: row.date, value: +idx.toFixed(4), rp });
   }
 
   return result;
@@ -121,7 +121,11 @@ export function buildIHSGSeries(benchmarkHistory, inception) {
   if (rows.length < 2) return [];
 
   const base = rows[0].price;
-  return rows.map(r => ({ date: r.date, value: +(r.price / base * 100).toFixed(4) }));
+  return rows.map((r, i) => ({
+    date:  r.date,
+    value: +(r.price / base * 100).toFixed(4),
+    rp:    i === 0 ? 0 : Math.log(r.price / rows[i - 1].price),
+  }));
 }
 
 /**
@@ -183,4 +187,93 @@ export function latestWeights(portfolio) {
     a.effective < b.effective ? 1 : -1,
   );
   return sorted[0]?.weights ?? {};
+}
+
+// ── Forward-test metric helpers ────────────────────────────────────────────────
+
+/**
+ * Extracts daily log-returns from a series produced by buildTrackerSeries or
+ * buildIHSGSeries. Drops the base row (rp=0 sentinel) so the length equals
+ * the number of return observations, not the number of price bars.
+ */
+export function extractDailyReturns(series) {
+  return series.slice(1).map(r => r.rp);
+}
+
+/**
+ * Annualized CAGR from first to last index value.
+ * nDays = number of trading-day return observations (series.length - 1).
+ * @returns {number|null}  decimal (0.12 = +12%)
+ */
+export function calcAnnualizedReturn(series, dpy = 252) {
+  if (!series || series.length < 2) return null;
+  const first = series[0].value;
+  const last  = series[series.length - 1].value;
+  if (!first || first <= 0) return null;
+  const nDays = series.length - 1;
+  return Math.pow(last / first, dpy / nDays) - 1;
+}
+
+/**
+ * Annualized volatility: population std dev × √dpy.
+ * Uses population variance (÷n) to match the optimizer's theta-decay convention.
+ * @returns {number|null}
+ */
+export function calcAnnualizedVol(dailyLogReturns, dpy = 252) {
+  const n = dailyLogReturns.length;
+  if (n < 2) return null;
+  const mean = dailyLogReturns.reduce((s, r) => s + r, 0) / n;
+  const variance = dailyLogReturns.reduce((s, r) => s + (r - mean) ** 2, 0) / n;
+  return Math.sqrt(variance) * Math.sqrt(dpy);
+}
+
+/**
+ * Maximum drawdown from peak to trough, expressed as a negative fraction.
+ * e.g. −0.15 means the portfolio fell 15% from its high-water mark.
+ * @returns {number|null}  always <= 0
+ */
+export function calcMaxDrawdown(series) {
+  if (!series || series.length < 2) return null;
+  let peak = series[0].value;
+  let maxDD = 0;
+  for (const { value } of series) {
+    if (value > peak) peak = value;
+    const dd = (value - peak) / peak;
+    if (dd < maxDD) maxDD = dd;
+  }
+  return maxDD;
+}
+
+/**
+ * Sharpe ratio: (annReturn - riskFreeRate) / annVol.
+ * Both inputs must be annualized decimals.
+ * @returns {number|null}
+ */
+export function calcSharpe(annReturn, annVol, riskFreeRate) {
+  if (annReturn == null || annVol == null || !annVol || !isFinite(annVol)) return null;
+  return (annReturn - riskFreeRate) / annVol;
+}
+
+/**
+ * Tracking error: annualized std dev of (rp − rb) daily differences.
+ * Caller must pass date-aligned parallel arrays (see App.jsx alignedPortBench).
+ * @returns {number|null}
+ */
+export function calcTrackingError(portfolioLogReturns, benchmarkLogReturns, dpy = 252) {
+  const n = Math.min(portfolioLogReturns.length, benchmarkLogReturns.length);
+  if (n < 2) return null;
+  const diffs = [];
+  for (let i = 0; i < n; i++) diffs.push(portfolioLogReturns[i] - benchmarkLogReturns[i]);
+  const mean = diffs.reduce((s, d) => s + d, 0) / n;
+  const variance = diffs.reduce((s, d) => s + (d - mean) ** 2, 0) / n;
+  return Math.sqrt(variance) * Math.sqrt(dpy);
+}
+
+/**
+ * Information ratio: annualized excess return / tracking error.
+ * @returns {number|null}
+ */
+export function calcInfoRatio(annualizedExcessReturn, trackingError) {
+  if (annualizedExcessReturn == null || !trackingError || !isFinite(trackingError)) return null;
+  return annualizedExcessReturn / trackingError;
 }

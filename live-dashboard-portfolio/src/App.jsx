@@ -13,9 +13,19 @@ import {
   buildIHSGSeries,
   mergeChartRows,
   sinceInceptionReturn,
-  latestWeights,
+  weightsAtDate,
   latestRebalanceDate,
+  extractDailyReturns,
+  calcAnnualizedReturn,
+  calcAnnualizedVol,
+  calcMaxDrawdown,
+  calcSharpe,
+  calcTrackingError,
+  calcInfoRatio,
 } from './math/portfolioIndex.js';
+import { buildLiveAttribution } from './math/attribution.js';
+import WeightsHistoryChart from './components/WeightsHistoryChart.jsx';
+import AttributionTable    from './components/AttributionTable.jsx';
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -182,6 +192,11 @@ function fmtTs(iso) {
   return new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function fmtRatio(val) {
+  if (val == null || !isFinite(val)) return '—';
+  return val.toFixed(2);
+}
+
 // ── Chart tooltip ─────────────────────────────────────────────────────────────
 
 function ChartTooltip({ active, payload, label }) {
@@ -214,6 +229,8 @@ export default function App() {
   const [portfoliosData, setPortfoliosData] = useState(null);
   const [error, setError]           = useState(null);
   const [visible, setVisible]       = useState(null); // set after data loads
+  const [weightDate, setWeightDate] = useState(null); // null → resolves to latest rebalance date
+  const [attrPortfolio, setAttrPortfolio] = useState(null); // null → first strategy
 
   // Load both JSON files
   useEffect(() => {
@@ -237,14 +254,15 @@ export default function App() {
       .catch(err => setError(err.message));
   }, []);
 
-  // Build chart data
-  const { chartRows, kpis, weightRows, portfolios, allTickers } = useMemo(() => {
+  // Build chart data and forward-test metrics
+  const { chartRows, metrics, portfolios, allTickers, rebalanceDates } = useMemo(() => {
     if (!snapshot || !portfoliosData) return {};
 
-    const assets    = snapshot.assets ?? [];
-    const benchmark = snapshot.benchmark?.priceHistory ?? null;
-    const inception = portfoliosData.inception;
-    const portfolios = portfoliosData.portfolios ?? [];
+    const assets       = snapshot.assets ?? [];
+    const benchmark    = snapshot.benchmark?.priceHistory ?? null;
+    const inception    = portfoliosData.inception;
+    const portfolios   = portfoliosData.portfolios ?? [];
+    const riskFreeRate = portfoliosData.riskFreeRate ?? 0.0575;
 
     // IHSG series
     const ihsgSeries = buildIHSGSeries(benchmark, inception);
@@ -262,25 +280,93 @@ export default function App() {
     ];
     const chartRows = mergeChartRows(allSeries);
 
-    // KPIs
-    const kpis = {
-      IHSG: sinceInceptionReturn(ihsgSeries),
-      ...Object.fromEntries(portfolios.map(p => [p.id, sinceInceptionReturn(portSeriesMap[p.id] ?? [])])),
+    // Date-keyed IHSG returns for tracking error alignment
+    const ihsgRetByDate = new Map();
+    for (const row of ihsgSeries) {
+      if (row.rp !== undefined) ihsgRetByDate.set(row.date, row.rp);
+    }
+
+    // Returns aligned by date (portfolio series and IHSG may have different date sets)
+    function alignedPortBench(portSeries) {
+      const portRets = [], benchRets = [];
+      for (const row of portSeries.slice(1)) {
+        const br = ihsgRetByDate.get(row.date);
+        if (br !== undefined) { portRets.push(row.rp); benchRets.push(br); }
+      }
+      return { portRets, benchRets };
+    }
+
+    // Compute metrics for IHSG baseline
+    const ihsgDailyRets = extractDailyReturns(ihsgSeries);
+    const ihsgAnnRet    = calcAnnualizedReturn(ihsgSeries);
+    const ihsgAnnVol    = calcAnnualizedVol(ihsgDailyRets);
+
+    const metrics = {
+      IHSG: {
+        totalReturn:   sinceInceptionReturn(ihsgSeries),
+        annReturn:     ihsgAnnRet,
+        annVol:        ihsgAnnVol,
+        maxDrawdown:   calcMaxDrawdown(ihsgSeries),
+        sharpe:        null,
+        trackingError: null,
+        infoRatio:     null,
+      },
     };
 
-    // Weight table: all tickers across all latest weight sets
+    // Compute metrics for each portfolio
+    for (const port of portfolios) {
+      const series    = portSeriesMap[port.id] ?? [];
+      const dailyRets = extractDailyReturns(series);
+      const annRet    = calcAnnualizedReturn(series);
+      const annVol    = calcAnnualizedVol(dailyRets);
+      const { portRets, benchRets } = alignedPortBench(series);
+      const te        = calcTrackingError(portRets, benchRets);
+      const excess    = annRet != null && ihsgAnnRet != null ? annRet - ihsgAnnRet : null;
+      metrics[port.id] = {
+        totalReturn:   sinceInceptionReturn(series),
+        annReturn:     annRet,
+        annVol,
+        maxDrawdown:   calcMaxDrawdown(series),
+        sharpe:        calcSharpe(annRet, annVol, riskFreeRate),
+        trackingError: te,
+        infoRatio:     calcInfoRatio(excess, te),
+      };
+    }
+
+    // Weight table: union of all tickers across every rebalance (stable across dates)
     const allTickers = [...new Set(
-      portfolios.flatMap(p => Object.keys(latestWeights(p)))
+      portfolios.flatMap(p => (p.rebalances ?? []).flatMap(r => Object.keys(r.weights ?? {})))
     )].sort();
 
-    const weightRows = allTickers.map(ticker => {
+    // All rebalance dates across every strategy, newest first (drives the date selector)
+    const rebalanceDates = [...new Set(
+      portfolios.flatMap(p => (p.rebalances ?? []).map(r => r.effective))
+    )].sort((a, b) => (a < b ? 1 : -1));
+
+    return { chartRows, metrics, portfolios, allTickers, rebalanceDates };
+  }, [snapshot, portfoliosData]);
+
+  // Date-aware weight rows: weights active on the selected rebalance date (default latest)
+  const activeWeightDate = weightDate ?? rebalanceDates?.[0] ?? null;
+  const weightRows = useMemo(() => {
+    if (!portfolios?.length || !activeWeightDate) return [];
+    return allTickers.map(ticker => {
       const row = { ticker };
-      for (const p of portfolios) row[p.id] = (latestWeights(p)[ticker] ?? 0) * 100;
+      for (const p of portfolios) {
+        const w = weightsAtDate(p.rebalances, activeWeightDate);
+        row[p.id] = (w[ticker] ?? 0) * 100;
+      }
       return row;
     });
+  }, [portfolios, allTickers, activeWeightDate]);
 
-    return { chartRows, kpis, weightRows, portfolios, allTickers };
-  }, [snapshot, portfoliosData]);
+  // Attribution: per-asset return + risk contribution for the selected strategy
+  const activeAttrId = attrPortfolio ?? portfolios?.[0]?.id ?? null;
+  const attribution = useMemo(() => {
+    if (!portfolios?.length || !snapshot?.assets || !activeAttrId || !portfoliosData?.inception) return null;
+    const p = portfolios.find(p => p.id === activeAttrId) ?? portfolios[0];
+    return buildLiveAttribution(p, snapshot.assets, portfoliosData.inception);
+  }, [portfolios, snapshot, portfoliosData?.inception, activeAttrId]);
 
   function toggleLine(id) {
     setVisible(prev => {
@@ -348,42 +434,75 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── KPI strip ───────────────────────────────────────────────────── */}
+      {/* ── Performance metrics table ────────────────────────────────── */}
       <div style={s.panel}>
-        <div style={s.sectionLabel}>Since Inception · Total Return</div>
-        <div style={s.kpiRow}>
+        <div style={s.sectionLabel}>Performance Metrics · Since Inception</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={s.table}>
+            <thead>
+              <tr>
+                <th style={s.thLeft}>Strategy</th>
+                <th style={s.th}>Total Return</th>
+                <th style={s.th}>Ann. Return</th>
+                <th style={s.th}>Ann. Vol</th>
+                <th style={s.th}>Sharpe</th>
+                <th style={s.th}>Max DD</th>
+                <th style={s.th}>Tracking Error</th>
+                <th style={s.th}>Info Ratio</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* IHSG benchmark row */}
+              {(() => {
+                const m = metrics?.['IHSG'];
+                return (
+                  <tr>
+                    <td style={s.tdLeft}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={s.dot(COLORS.IHSG)} />
+                        IHSG
+                        <span style={{ color: TEXT_DIM, fontWeight: 400, fontSize: 9 }}>Benchmark</span>
+                      </span>
+                    </td>
+                    <td style={{ ...s.td(false), color: m?.totalReturn > 0 ? '#00FF88' : m?.totalReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.totalReturn)}</td>
+                    <td style={{ ...s.td(false), color: m?.annReturn > 0 ? '#00FF88' : m?.annReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.annReturn)}</td>
+                    <td style={s.td(false)}>{fmtPct(m?.annVol, false)}</td>
+                    <td style={s.td(false)}>—</td>
+                    <td style={{ ...s.td(false), color: m?.maxDrawdown < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.maxDrawdown, false)}</td>
+                    <td style={s.td(false)}>—</td>
+                    <td style={s.td(false)}>—</td>
+                  </tr>
+                );
+              })()}
 
-          {/* IHSG */}
-          {(() => {
-            const ret = kpis?.['IHSG'];
-            return (
-              <div style={s.kpiCard(COLORS.IHSG, visible?.has('IHSG'))}>
-                <div style={s.kpiLabel(COLORS.IHSG)}>IHSG</div>
-                <div style={s.kpiValue}>{fmtPct(ret)}</div>
-                <div style={s.kpiSub}>Benchmark</div>
-              </div>
-            );
-          })()}
-
-          {(portfolios ?? []).map(p => {
-            const ret  = kpis?.[p.id];
-            const ihsg = kpis?.['IHSG'];
-            const active = ret != null && ihsg != null ? ret - ihsg : null;
-            const col  = COLORS[p.id] ?? '#64748B';
-            const isPos = active != null && active > 0;
-            return (
-              <div key={p.id} style={s.kpiCard(col, visible?.has(p.id))}>
-                <div style={s.kpiLabel(col)}>{p.label}</div>
-                <div style={s.kpiValue}>{fmtPct(ret)}</div>
-                <div style={s.kpiSub}>
-                  Active:{' '}
-                  <span style={{ color: isPos ? '#00FF88' : active != null && active < 0 ? '#EF4444' : TEXT_DIM }}>
-                    {fmtPct(active)}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+              {/* Portfolio rows */}
+              {(portfolios ?? []).map(p => {
+                const m   = metrics?.[p.id];
+                const col = COLORS[p.id] ?? '#64748B';
+                return (
+                  <tr key={p.id}>
+                    <td style={s.tdLeft}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={s.dot(col)} />
+                        {p.label}
+                      </span>
+                    </td>
+                    <td style={{ ...s.td(false), color: m?.totalReturn > 0 ? '#00FF88' : m?.totalReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.totalReturn)}</td>
+                    <td style={{ ...s.td(false), color: m?.annReturn > 0 ? '#00FF88' : m?.annReturn < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.annReturn)}</td>
+                    <td style={s.td(false)}>{fmtPct(m?.annVol, false)}</td>
+                    <td style={{ ...s.td(false), color: m?.sharpe > 0 ? '#00FF88' : m?.sharpe < 0 ? '#EF4444' : TEXT_MED, fontWeight: m?.sharpe > 1 ? 700 : 400 }}>{fmtRatio(m?.sharpe)}</td>
+                    <td style={{ ...s.td(false), color: m?.maxDrawdown < 0 ? '#EF4444' : TEXT_MED }}>{fmtPct(m?.maxDrawdown, false)}</td>
+                    <td style={s.td(false)}>{fmtPct(m?.trackingError, false)}</td>
+                    <td style={{ ...s.td(false), color: m?.infoRatio > 0 ? '#00FF88' : m?.infoRatio < 0 ? '#EF4444' : TEXT_MED, fontWeight: m?.infoRatio > 0.5 ? 700 : 400 }}>{fmtRatio(m?.infoRatio)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 9, color: TEXT_DIM }}>
+          Sharpe = (ann. return − {((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}% BI-Rate) / ann. vol ·
+          Annualized metrics are volatile at short horizons; stabilize ~63 trading days from inception.
         </div>
       </div>
 
@@ -474,8 +593,23 @@ export default function App() {
 
       {/* ── Weight matrix ───────────────────────────────────────────────── */}
       <div style={s.panel}>
-        <div style={s.sectionLabel}>
-          Portfolio Weights — latest rebalance per strategy
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div style={s.sectionLabel}>Portfolio Weights</div>
+          {(rebalanceDates?.length ?? 0) > 1 && (
+            <label style={{ fontSize: 9, color: TEXT_DIM, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+              REBALANCE
+              <select
+                value={activeWeightDate ?? ''}
+                onChange={e => setWeightDate(e.target.value)}
+                style={{
+                  background: '#0A1628', color: TEXT_MED, border: `1px solid ${BORDER}`,
+                  borderRadius: 4, padding: '3px 6px', fontSize: 10, fontFamily: 'monospace', cursor: 'pointer',
+                }}
+              >
+                {rebalanceDates.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
+          )}
         </div>
 
         {!weightRows?.length ? (
@@ -531,12 +665,60 @@ export default function App() {
               </table>
             </div>
             <div style={{ marginTop: 10, fontSize: 9, color: TEXT_DIM }}>
-              Weights as of{' '}
-              {(portfolios ?? []).map(p => {
-                const d = latestRebalanceDate(p.rebalances);
-                return <span key={p.id} style={{ marginRight: 12, color: COLORS[p.id] ?? TEXT_DIM }}>{p.label}: {d ?? '—'}</span>;
-              })}
+              Showing weights active on <span style={{ color: TEXT_MED }}>{activeWeightDate ?? '—'}</span>.
+              Each strategy reflects its most recent rebalance on or before this date.
             </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Rebalance History & Attribution ─────────────────────────────── */}
+      <div style={s.panel}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+          <span style={s.sectionLabel}>REBALANCE HISTORY & ATTRIBUTION</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {(portfolios ?? []).map(p => (
+              <button
+                key={p.id}
+                onClick={() => setAttrPortfolio(p.id)}
+                style={{
+                  background:    activeAttrId === p.id ? (COLORS[p.id] ?? '#64748B') : 'transparent',
+                  color:         activeAttrId === p.id ? '#05080F' : (COLORS[p.id] ?? TEXT_DIM),
+                  border:        `1px solid ${COLORS[p.id] ?? BORDER}`,
+                  borderRadius:  4,
+                  padding:       '2px 8px',
+                  fontSize:      9,
+                  fontFamily:    'inherit',
+                  cursor:        'pointer',
+                  letterSpacing: 0.5,
+                }}
+              >
+                {p.id}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {(attribution?.weightRows?.length ?? 0) < 2 ? (
+          <div style={{ color: TEXT_DIM, fontSize: 10, padding: '12px 0' }}>
+            Attribution view requires 2 or more rebalance periods.
+            Check back after the first weekly rebalance on 2026-06-29.
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: 9, color: TEXT_DIM, marginBottom: 8 }}>
+              Weight path across {attribution.weightRows.length} rebalances (top 12 names; rest = "Other").
+            </div>
+            <WeightsHistoryChart
+              weightRows={attribution.weightRows}
+              order={attribution.order}
+            />
+            <div style={{ fontSize: 9, color: TEXT_DIM, margin: '10px 0 6px' }}>
+              Return contribution is Carino-linked (sums to{' '}
+              <span style={{ color: TEXT_MED }}>{attribution.totalReturn != null ? `${(attribution.totalReturn * 100).toFixed(1)}%` : '—'}</span>
+              {' '}total return); risk contribution = Cov(w_f, r_p)/Var(r_p), realized (sums to 100%).
+            </div>
+            <AttributionTable rows={attribution.rows} />
           </>
         )}
       </div>

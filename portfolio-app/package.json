@@ -6,6 +6,7 @@
   "scripts": {
     "fetch-snapshot":  "node data/fetch-snapshot.js",
     "refresh-sectors": "node data/refresh-sectors.js",
+    "optimize":        "node scripts/optimize.mjs",
     "predev":          "npm run fetch-snapshot",
     "dev":             "vite",
     "build":           "npm run fetch-snapshot && vite build",

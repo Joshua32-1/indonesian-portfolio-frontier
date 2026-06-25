@@ -2,6 +2,7 @@
   "_comment": "Update weights after each REGENERATE in portfolio-app. Append rebalance rows; never overwrite old ones. Optional per-row `views` field links to the point-in-time analyst-view capture for that week (portfolio-app/data/view-history/views-YYYY-MM-DD.json) for future kappa-replay.",
   "inception": "2026-06-08",
   "updated": "2026-06-09",
+  "riskFreeRate": 0.0575,
   "portfolios": [
     {
       "id": "max-sharpe",
