@@ -5,6 +5,7 @@ import EquityCurveChart from './components/EquityCurveChart.jsx';
 import MetricsTable from './components/MetricsTable.jsx';
 import WeightsHistoryChart from './components/WeightsHistoryChart.jsx';
 import AttributionTable from './components/AttributionTable.jsx';
+import StrategyBacktest from './components/StrategyBacktest.jsx';
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -13,6 +14,7 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [computing, setComputing] = useState(false);
   const [attrPortfolio, setAttrPortfolio] = useState('MinVar'); // attribution view selector
+  const [strategy, setStrategy] = useState(undefined); // undefined=loading, null=absent, obj=loaded
 
   // Load the pre-fetched history once.
   useEffect(() => {
@@ -23,6 +25,14 @@ export default function App() {
         setIncluded(new Set(d.tickers.map(t => t.ticker))); // default = all 25
       })
       .catch(e => setLoadError(e.message));
+  }, []);
+
+  // Load the precomputed tail-aware strategy backtest (optional — `npm run backtest`).
+  useEffect(() => {
+    fetch('/backtest-results.json')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setStrategy(d))
+      .catch(() => setStrategy(null));
   }, []);
 
   // Newest *included* listing — the name that binds the window.
@@ -64,6 +74,12 @@ export default function App() {
 
   return (
     <Shell>
+      {/* Headline: precomputed tail-aware strategy backtest (default universe) */}
+      <div style={{ ...panel, marginBottom: 16 }}>
+        <SectionTitle>STRATEGY BACKTEST — Max-Sharpe + tail-λ variants × frequency × fees</SectionTitle>
+        <StrategyBacktest results={strategy} />
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: 16 }}>
         {/* Left: universe */}
         <div style={panel}>
@@ -81,11 +97,11 @@ export default function App() {
             <WindowBar w={w} computing={computing} warnings={result?.warnings} />
           </div>
           <div style={panel}>
-            <SectionTitle>EQUITY CURVES — gross, indexed to 100 at window start</SectionTitle>
+            <SectionTitle>EQUITY CURVES — net of costs, indexed to 100 at window start</SectionTitle>
             <EquityCurveChart chart={result?.chart} />
           </div>
           <div style={panel}>
-            <SectionTitle>PERFORMANCE & RISK</SectionTitle>
+            <SectionTitle>PERFORMANCE & RISK — net of costs ({w?.costModel ?? '—'} model)</SectionTitle>
             <MetricsTable metrics={result?.metrics} />
           </div>
 
@@ -168,11 +184,13 @@ function Shell({ children }) {
     <div style={{ minHeight: '100vh', background: '#0A1628', color: '#E2E8F0', fontFamily: 'system-ui, sans-serif', padding: 20 }}>
       <div style={{ maxWidth: 1200, margin: '0 auto' }}>
         <h1 style={{ fontSize: 18, fontWeight: 800, margin: '0 0 4px' }}>
-          IDX Covariance-Only Backtest
+          IDX Walk-Forward Backtest
         </h1>
         <p style={{ fontSize: 12, color: '#5B7A95', margin: '0 0 18px' }}>
-          Weekly-rebalanced minimum-variance vs equal-weight vs IHSG. Σ = weekly ρ × theta-decay daily σ
-          (half-life 63, 252-day), Ledoit-Wolf shrinkage. Long-only, no caps. Gross of costs.
+          Tail-aware machinery vs minimum-variance, equal-weight, and IHSG — walk-forward, no look-ahead,
+          net of IDX transaction costs. Σ = weekly ρ × theta-decay daily σ (half-life 63, 252-day),
+          Ledoit-Wolf shrinkage. The strategy panel is precomputed (<code>npm run backtest</code>); the
+          explorer below recomputes min-variance live as you toggle the universe.
         </p>
         {children}
       </div>

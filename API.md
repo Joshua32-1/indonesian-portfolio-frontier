@@ -86,7 +86,8 @@ Path: `live-dashboard-portfolio/data/portfolios.json`. **Manually maintained, ap
       "id": "max-sharpe",                  // unique slug; colour mapped in src/App.jsx COLORS
       "label": "Max Sharpe (Consensus)",
       "rebalances": [                      // sorted ascending by effective; NEVER overwrite past rows
-        { "effective": "2026-06-08", "weights": { "BBCA": 0.09, "BBRI": 0.06, ... } }
+        { "effective": "2026-06-08", "weights": { "BBCA": 0.09, "BBRI": 0.06, ... },
+          "views": "view-history/views-2026-06-05.json" }   // optional; see §3a (κ-replay)
       ]
     }
     // current ids: max-sharpe, min-var, tail-10, tail-20, tail-35, tail-50
@@ -99,6 +100,34 @@ Path: `live-dashboard-portfolio/data/portfolios.json`. **Manually maintained, ap
 - Tickers are **bare symbols** (`BBCA`), matching the lean snapshot — *not* `BBCA.JK`.
 - A new `effective` row only changes the line's **future** slope; past index values are unchanged (stitched compounding — see [ARCHITECTURE.md](ARCHITECTURE.md)).
 - Use the [`rebalance-portfolio`](.claude/skills/rebalance-portfolio/SKILL.md) skill to append entries safely, and the [`data-pipeline-checker`](.claude/agents/data-pipeline-checker.md) agent to validate this contract after edits.
+- **`views`** (optional): a reference to the point-in-time analyst-view capture for that rebalance — see §3a.
+
+---
+
+## 3a. `view-history/` — point-in-time analyst views (for κ-replay)
+
+Path: `portfolio-app/data/view-history/views-YYYY-MM-DD.json`. Written automatically by `fetch-snapshot` (locally on `npm run dev`, and weekly by the `Capture Analyst Views` GitHub Action), keyed by the snapshot's weekly-data end date — **one file per week**.
+
+**Why:** the optimizer's weights depend on inputs that, except for prices, are *not reconstructible after the fact* — chiefly the analyst price targets (`forwardEstimates`), plus slowly-varying caps / dividend yield / BI-rate. Prices for any past date come from [`backtest-portfolio/public/backtest-history.json`](backtest-portfolio/public/backtest-history.json), so we archive only the non-reconstructible bits. This is the data a future **κ-replay** (or λ-replay) of the *live, signal-driven* strategy needs — recompute Σ from prices, μ/views + caps + rf from the weekly capture, and re-run the optimizer (`optimizeTailAware`/`walkVariant`) at any turnover penalty.
+
+**Trimmed schema (~5–10 KB):**
+```jsonc
+{
+  "asOf": "2026-06-05",            // = the snapshot's weeklyEnd
+  "generated": "2026-06-08T…Z",
+  "riskFreeRate": 0.0575,          // BI-rate at capture
+  "assets": [
+    { "ticker": "BBCA",
+      "currentPrice": 9800,
+      "dividendYield": 0.038,
+      "marketCap": 1.2e15,
+      "sharesOutstanding": 1.23e11,
+      "forwardEstimates": { "lowTarget": 9000, "meanTarget": 11500, "highTarget": 13000, "totalAnalysts": 32 } }
+    // … one per ticker
+  ]
+}
+```
+Capturing **weekly** (not just at each rebalance) keeps the *finest* replay grid open even though trades happen monthly/quarterly. Inception rows in `portfolios.json` predate capture and have no `views` link.
 
 ---
 

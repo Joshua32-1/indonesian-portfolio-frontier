@@ -76,7 +76,9 @@ function lastCompletedTradingDayISO(refDate = new Date()) {
 
 // ── Fetch + serialise ─────────────────────────────────────────────────────────
 
-/** Price history via chart(); drops unsettled (null close/adjclose) bars. */
+/** Price history via chart(); drops unsettled (null close/adjclose) bars. Keeps raw
+ * close + volume so the backtest can derive a point-in-time liquidity (dollar-volume)
+ * series for its transaction-cost model. */
 async function fetchPriceHistory(ticker, { period1, period2, interval }) {
   const result = await yahooFinance.chart(ticker, { period1, period2, interval });
   const quotes = result.quotes ?? [];
@@ -86,19 +88,45 @@ async function fetchPriceHistory(ticker, { period1, period2, interval }) {
     .map(q => ({
       date: new Date(q.date).toISOString().slice(0, 10),
       adjClose: q.adjclose != null ? q.adjclose : q.close,
+      close: q.close != null ? q.close : q.adjclose, // raw close for rupiah-traded value
+      volume: q.volume ?? 0,
     }));
 }
 
-/** { date, adjClose }[] → compact { dates[], adjClose[] }, trimmed to <= isoEnd. */
-function serialize(history, isoEnd) {
+/**
+ * { date, adjClose, close, volume }[] → compact { dates[], adjClose[] }, trimmed to
+ * <= isoEnd. With { withDollarVol }, also emits dollarVol[] = raw close × volume
+ * (rupiah traded per bar) — the liquidity proxy that drives per-asset trading costs.
+ */
+function serialize(history, isoEnd, { withDollarVol = false } = {}) {
   const dates = [];
   const adjClose = [];
+  const dollarVol = withDollarVol ? [] : null;
   for (const row of history) {
     if (row.adjClose == null || row.date > isoEnd) continue;
     dates.push(row.date);
     adjClose.push(+row.adjClose.toFixed(4));
+    if (withDollarVol) {
+      const px = row.close ?? row.adjClose;
+      dollarVol.push(Math.round((px ?? 0) * (row.volume ?? 0)));
+    }
   }
-  return { dates, adjClose };
+  return withDollarVol ? { dates, adjClose, dollarVol } : { dates, adjClose };
+}
+
+/**
+ * Shares outstanding via quoteSummary → defaultKeyStatistics. Current value only
+ * (Yahoo exposes no history), so the backtest's cap weights assume a ~constant share
+ * count — a documented approximation for the BL-equilibrium prior. null on failure.
+ */
+async function fetchSharesOut(ticker) {
+  try {
+    const r = await yahooFinance.quoteSummary(ticker, { modules: ['defaultKeyStatistics'] });
+    const so = r?.defaultKeyStatistics?.sharesOutstanding;
+    return Number.isFinite(so) && so > 0 ? so : null;
+  } catch {
+    return null;
+  }
 }
 
 async function main() {
@@ -114,15 +142,16 @@ async function main() {
     const bare = yahooTicker.replace('.JK', '');
     process.stdout.write(`  ↳ ${bare} … `);
     try {
-      const [weeklyRaw, dailyRaw] = await Promise.all([
+      const [weeklyRaw, dailyRaw, sharesOut] = await Promise.all([
         fetchPriceHistory(yahooTicker, { period1: HISTORY_START, period2: chartEnd, interval: '1wk' }),
         fetchPriceHistory(yahooTicker, { period1: HISTORY_START, period2: chartEnd, interval: '1d' }),
+        fetchSharesOut(yahooTicker),
       ]);
       const weekly = serialize(weeklyRaw, weeklyEnd);
-      const daily = serialize(dailyRaw, dailyEnd);
+      const daily = serialize(dailyRaw, dailyEnd, { withDollarVol: true });
       const listing = daily.dates[0] ?? weekly.dates[0] ?? null;
-      tickers.push({ ticker: bare, listing, weekly, daily });
-      console.log(`ok (listing ${listing}, ${weekly.dates.length}w / ${daily.dates.length}d)`);
+      tickers.push({ ticker: bare, listing, sharesOut, weekly, daily });
+      console.log(`ok (listing ${listing}, ${weekly.dates.length}w / ${daily.dates.length}d, shrs ${sharesOut ?? 'n/a'})`);
     } catch (err) {
       console.log(`FAILED — ${err.message}`);
     }

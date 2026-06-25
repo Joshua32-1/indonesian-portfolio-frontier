@@ -73,7 +73,7 @@ The factor model (`useFactorModel`) is **off by default**; when on, BL blends a 
 - **Not investment advice.** A research/teaching tool.
 - The browser optimizer is a **heuristic hill-climber**, not a guaranteed global optimum. The **Oracle Sharpe** portfolio is a hindsight ceiling (best Sharpe across scenario optima) — **not investable**; use Robust / Consensus for implementable allocations.
 - **Survivorship bias** in the fixed ticker list (see Market data).
-- **No transaction-cost model** beyond the optional turnover penalty κ; no taxes, slippage, or borrow costs.
+- **The optimizer itself has no transaction-cost model** beyond the optional turnover penalty κ; it does not net out taxes, slippage, or borrow costs when constructing weights. The companion **backtest app** (`backtest-portfolio/`) *does* apply a liquidity-aware IDX cost model when evaluating realized performance: per-asset half-spread from trailing dollar-volume (5–50 bps, `halfSpreadK/floor/ceil`) plus asymmetric brokerage (buy ≈ 0.15%, sell ≈ 0.25% incl. levy/tax), charged on drift-adjusted turnover, with a flat per-side fallback when liquidity data is absent. See `backtest-portfolio/src/backtestEngine.js` (`COST`).
 - Sector labels come from Yahoo's **industry** field (finer than GICS) and can drift; `refresh-sectors` updates them.
 - Analyst targets are a **12-month** horizon mapped onto a 1-year return — coverage and target staleness vary by name.
 
