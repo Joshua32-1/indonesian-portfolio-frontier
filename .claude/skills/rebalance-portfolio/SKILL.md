@@ -33,6 +33,16 @@ Moves chosen weights from the optimizer into the dashboard's tracked history. Th
 - `rebalances[]` stays sorted ascending by `effective`.
 - New strategy? Also add a colour entry in `live-dashboard-portfolio/src/App.jsx` `COLORS`.
 
+## Point-in-time inputs (for future κ-replay)
+
+Analyst views are captured **automatically every week** by the `Capture Analyst Views` GitHub Action (and on any local `npm run fetch-snapshot`) into `portfolio-app/data/view-history/views-YYYY-MM-DD.json` — a trimmed file holding `forwardEstimates` + caps + dividend yield + `riskFreeRate`. Together with prices reconstructible from `backtest-portfolio/public/backtest-history.json`, this is everything a future replay needs to recompute the optimizer's weights at any turnover-penalty κ (or λ). **No manual snapshot copy is needed.**
+
+Optional but recommended at each rebalance: add a `views` reference to the new rows so the link is explicit:
+```json
+{ "effective": "2026-07-15", "weights": { "BBCA": 0.09, "...": 0.0 }, "views": "view-history/views-2026-07-10.json" }
+```
+Use the latest `view-history` file with `asOf` ≤ `effective`. (Inception rows predate capture and have no `views` link.)
+
 ## Finish
 
 Commit and push (only when the user asks) → Vercel auto-redeploys. The chart's past values won't change; only the future slope from `effective` onward.

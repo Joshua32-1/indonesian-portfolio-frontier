@@ -14,7 +14,7 @@
  */
 
 import YahooFinance from 'yahoo-finance2'; // v3 — capitalised class import
-import { writeFileSync } from 'fs';
+import { writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import {
@@ -348,9 +348,36 @@ async function buildSnapshot() {
   };
 
   const outPath = join(__dirname, 'live-market-snapshot.json');
-  writeFileSync(outPath, JSON.stringify(snapshot, null, 2));
+  const payload = JSON.stringify(snapshot, null, 2);
+  writeFileSync(outPath, payload);
   console.log(`\n📦  Snapshot written → ${outPath}`);
   console.log(`    ${assetProfiles.length} assets\n`);
+
+  // Point-in-time view history: keep one TRIMMED dated copy per week so the analyst
+  // targets (forwardEstimates) accumulate a true history. This is the only
+  // non-reconstructible input a future full-strategy (analyst-view) walk-forward needs
+  // — prices for any past date come from backtest-history.json, so we store only the
+  // views + the slowly-varying fundamentals (caps, dividend yield, rf), ~5–10 KB.
+  // Keyed by the snapshot's weekly-data end date, so multiple fetches in a week
+  // overwrite → exactly one file per week.
+  const viewSnapshot = {
+    asOf:         weeklyEnd || new Date().toISOString().slice(0, 10),
+    generated:    snapshot.generated,
+    riskFreeRate,
+    assets: assetProfiles.map(a => ({
+      ticker:            a.ticker,
+      currentPrice:      a.meta?.currentPrice ?? null,
+      dividendYield:     a.meta?.dividendYield ?? 0,
+      marketCap:         a.meta?.marketCap ?? null,
+      sharesOutstanding: a.meta?.sharesOutstanding ?? null,
+      forwardEstimates:  a.forwardEstimates,
+    })),
+  };
+  const viewDir = join(__dirname, 'view-history');
+  mkdirSync(viewDir, { recursive: true });
+  const viewPath = join(viewDir, `views-${viewSnapshot.asOf}.json`);
+  writeFileSync(viewPath, JSON.stringify(viewSnapshot));
+  console.log(`🗄️   Captured point-in-time analyst views → ${viewPath}\n`);
 }
 
 buildSnapshot().catch(err => {
