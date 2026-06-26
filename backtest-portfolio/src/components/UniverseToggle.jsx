@@ -1,16 +1,18 @@
 /** Sector-less ticker toggle list (mirrors the optimizer's CORRELATION-tab universe panel). */
-export default function UniverseToggle({ tickers, included, newestIncluded, onToggle, onAll, onNone }) {
+export default function UniverseToggle({ tickers, included, newestIncluded, onToggle, onAll, onNone, hideHeader = false }) {
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: '#7DA8C7' }}>
-          UNIVERSE ({included.size}/{tickers.length})
-        </span>
-        <span>
-          <button onClick={onAll} style={btn}>All</button>
-          <button onClick={onNone} style={btn}>None</button>
-        </span>
-      </div>
+      {!hideHeader && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: '#7DA8C7' }}>
+            UNIVERSE ({included.size}/{tickers.length})
+          </span>
+          <span>
+            <button onClick={onAll} style={btn}>All</button>
+            <button onClick={onNone} style={btn}>None</button>
+          </span>
+        </div>
+      )}
       <div style={{ maxHeight: 520, overflowY: 'auto', paddingRight: 4 }}>
         {tickers.map(t => {
           const on = included.has(t.ticker);

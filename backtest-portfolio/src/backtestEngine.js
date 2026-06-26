@@ -11,6 +11,11 @@
  * then hold one week and book the realized return. Equal-weight and IHSG are tracked
  * alongside. Returns are GROSS (no transaction costs).
  *
+ * Optional turnover penalty (opts.kappa > 0): the min-variance step is penalized toward
+ * the drifted prior weights (minVarTurnoverPenalized), trading a little variance for less
+ * weight churn → lower turnover and cost drag. κ = 0 (default) is an exact no-op. This is
+ * min-variance-specific and distinct from the production tail-aware κ in optimizeTailAware.
+ *
  * Window: backtestStart = (newest listing among included tickers) + 1 calendar year;
  * dropping the newest name(s) pushes the start earlier → a longer backtest.
  * ─────────────────────────────────────────────────────────────────────────────
@@ -27,6 +32,25 @@ import { findMinVariancePortfolio, optimizeTailAware } from '../../portfolio-app
 import { computeEquilibriumReturns, defaultDelta } from '../../portfolio-app/src/math/blackLitterman.js';
 
 const CORR_WINDOW_DAYS = 365; // trailing 1-year weekly correlation window
+
+// Unconstrained long-only optimizer constraints: a single synthetic 'ALL' sector capped at
+// 1.0 and a per-name cap of 1.0 → neither binds (historical default). runLiveStrategy builds
+// a tighter bundle when the user sets a position or sector cap.
+const DEFAULT_CONSTRAINTS = { sectorCaps: { ALL: 1 }, maxPositionCap: 1 };
+
+// Static ticker → sector labels (sourced from the optimizer's live-market-snapshot.json,
+// assets[].sector). The backtest snapshot carries no sector field, and the universe is a
+// fixed ≤25-name large-cap set, so a checked-in map is sufficient for sector caps.
+const SECTOR_MAP = {
+  BBCA: 'Financials', BBRI: 'Financials', BMRI: 'Financials', BBNI: 'Financials', BNGA: 'Financials',
+  TLKM: 'Communication Services', ISAT: 'Communication Services',
+  ASII: 'Industrials', UNTR: 'Industrials', JSMR: 'Industrials', AMRT: 'Consumer Defensive',
+  INDF: 'Consumer Defensive', ICBP: 'Consumer Defensive', CPIN: 'Consumer Defensive',
+  KLBF: 'Healthcare', SIDO: 'Healthcare',
+  CMRY: 'Consumer Defensive', PWON: 'Real Estate', BIRD: 'Industrials',
+  ANTM: 'Basic Materials', INCO: 'Basic Materials', MDKA: 'Basic Materials', NCKL: 'Basic Materials',
+  AADI: 'Energy', LSIP: 'Consumer Defensive',
+};
 
 // ── small stats helpers ───────────────────────────────────────────────────────
 
@@ -172,6 +196,29 @@ function oneWayTurnover(wTarget, wPre) {
 }
 
 /**
+ * Turnover-penalized minimum variance via a partial-rebalance (inertia) blend:
+ *
+ *     w = (1 − κ)·w_minvar + κ·w_drift
+ *
+ * where w_minvar is the fresh unpenalized min-variance target and w_drift is last step's
+ * weights carried forward by realized returns. Both lie on the long-only simplex
+ * (wₖ ≥ 0, Σw = 1), so the convex blend does too — no projection needed. This is the
+ * closed-form L2-turnover-penalized direction (a "trade partway to target" scheme): the
+ * deviation from the drifted prior, w − w_drift = (1−κ)(w_minvar − w_drift), shrinks by
+ * exactly (1−κ), so turnover falls monotonically with κ. κ ∈ [0,1): 0 = full rebalance,
+ * 0.5 = trade halfway, →1 = hold (zero turnover).
+ *
+ * With κ = 0 (or no prior drift) the unpenalized min-variance solution is returned
+ * unchanged, so the κ-off path is byte-identical to findMinVariancePortfolio.
+ */
+function minVarTurnoverPenalized(covMatrix, volAssets, wDrift, kappa, constraints = DEFAULT_CONSTRAINTS) {
+  const w0 = findMinVariancePortfolio(covMatrix, volAssets, constraints, true);
+  if (!(kappa > 0) || !wDrift) return w0;
+  const a = Math.min(Math.max(kappa, 0), 0.95); // clamp; never fully freeze
+  return w0.map((x, k) => (1 - a) * x + a * wDrift[k]);
+}
+
+/**
  * Cost (fraction of portfolio) to move from wPre → wTarget.
  * advVec: trailing average daily value (IDR) per asset, or null for the flat model.
  */
@@ -278,6 +325,7 @@ function buildAttribution(included, weightRows, cByAsset, portRets) {
  */
 export function runBacktest(data, includedTickers, opts = {}) {
   const volHalfLife = opts.volHalfLife ?? DEFAULT_VOL_HALF_LIFE;
+  const kappa = opts.kappa ?? 0; // turnover penalty on the min-variance step (0 = off, exact baseline)
   const rf = data.riskFreeRate ?? 0.0575;
   const warnings = [];
 
@@ -383,7 +431,9 @@ export function runBacktest(data, includedTickers, opts = {}) {
       volHalfLife, shrinkage: true, nObs: obs,
     });
 
-    const wMinVar = findMinVariancePortfolio(covMatrix, volAssets, { sectorCaps: { ALL: 1 }, maxPositionCap: 1 }, true);
+    // κ>0: penalize the min-var target toward the prior step's drifted weights (less churn).
+    const wDrift = kappa > 0 && i > 0 ? driftWeights(wMVByStep[i - 1], rByStep[i - 1]) : null;
+    const wMinVar = minVarTurnoverPenalized(covMatrix, volAssets, wDrift, kappa);
     if (i === rebalanceRows.length - 2) {
       latestWeights = included.map((a, k) => ({ ticker: a.ticker, weight: wMinVar[k] }));
     }
@@ -514,7 +564,7 @@ const VARIANTS = [
 /** Build per-step context (Σ, μ_eq, realized returns, ADV) once for a rebalance grid. */
 function buildStepContexts(grid, ctx) {
   const { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife,
-    benchByKey, sharesOut, capMode, rf } = ctx;
+    benchByKey, sharesOut, capMode, rf, priorMode = 'cap', useSectors = false } = ctx;
   const n = included.length;
   const contexts = [];
   let lookAhead = null;
@@ -532,21 +582,28 @@ function buildStepContexts(grid, ctx) {
       if (end >= 0 && dailyRet[k].dates[end] >= tNext && !lookAhead) {
         lookAhead = `${dailyRet[k].dates[end]} >= next ${tNext}`;
       }
-      return { ticker: a.ticker, sector: 'ALL', meta: { dailyReturns: slice } };
+      // Real sector labels only when sector caps are active; otherwise a single synthetic
+      // 'ALL' sector (preserves the unconstrained default and runStrategyBacktest behavior).
+      const sector = useSectors ? (SECTOR_MAP[a.ticker] ?? 'Other') : 'ALL';
+      return { ticker: a.ticker, sector, meta: { dailyReturns: slice } };
     });
     const { covMatrix } = computeCovarianceMatrix(matrix, volAssets, { volHalfLife, shrinkage: true, nObs: obs });
 
-    // Point-in-time cap weights for the equilibrium prior: sharesOut × price(t).
+    // Equilibrium-prior reference weights w_prior. capMode='equal' (shares unreliable) forces
+    // equal regardless of priorMode. Otherwise priorMode picks: 'cap' = market-cap (sharesOut ×
+    // price(t)), 'equal' = 1/n, 'shrunk' = 50/50 blend (both inputs sum to 1 → blend does too).
+    const equalW = Array(n).fill(1 / n);
     let capW;
-    if (capMode === 'cap') {
+    if (capMode !== 'cap' || priorMode === 'equal') {
+      capW = equalW;
+    } else {
       const caps = included.map((a, k) => {
         const px = row[a.ticker];
         return px > 0 && sharesOut[k] > 0 ? px * sharesOut[k] : 0;
       });
       const s = caps.reduce((acc, v) => acc + v, 0);
-      capW = s > 0 ? caps.map(v => v / s) : Array(n).fill(1 / n);
-    } else {
-      capW = Array(n).fill(1 / n);
+      const capRaw = s > 0 ? caps.map(v => v / s) : equalW;
+      capW = priorMode === 'shrunk' ? capRaw.map((v, k) => 0.5 * v + 0.5 * equalW[k]) : capRaw;
     }
     const delta = defaultDelta(covMatrix, capW, rf);
     const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rf, delta });
@@ -573,24 +630,111 @@ function buildStepContexts(grid, ctx) {
   return { contexts, lookAhead };
 }
 
-/** Min-variance weight path on a grid (each step independent, deterministic). */
-function walkMinVar(contexts) {
-  return contexts.map(c =>
-    findMinVariancePortfolio(c.covMatrix, c.volAssets, { sectorCaps: { ALL: 1 }, maxPositionCap: 1 }, true));
+/**
+ * Min-variance weight path on a grid. κ = 0 → each step independent & deterministic
+ * (identical to the historical behavior). κ > 0 → each step is penalized toward the prior
+ * step's drifted weights via minVarTurnoverPenalized, so the walk is sequential.
+ */
+function walkMinVar(contexts, kappa = 0, constraints = DEFAULT_CONSTRAINTS) {
+  const weights = [];
+  for (let i = 0; i < contexts.length; i++) {
+    const c = contexts[i];
+    const wDrift = kappa > 0 && i > 0 ? driftWeights(weights[i - 1], contexts[i - 1].rVec) : null;
+    weights.push(minVarTurnoverPenalized(c.covMatrix, c.volAssets, wDrift, kappa, constraints));
+  }
+  return weights;
+}
+
+/**
+ * Apply a uniform partial-rebalance (inertia) turnover penalty to ANY pre-computed weight
+ * path: each step trades only (1−κ) of the way to its target, blending toward the prior
+ * step's drifted weights — wᵢ ← (1−a)·wᵢ + a·drift(wᵢ₋₁). Same well-defined, simplex-safe,
+ * monotone blend used by minVarTurnoverPenalized, so κ means the SAME thing across every
+ * strategy (Max-Sharpe, Tail, Min-Var) rather than relying on the optimizer's native
+ * turnover term — which the avgMuSharpe (Max-Sharpe) objective ignores entirely. κ = 0 → no-op.
+ */
+function blendTowardDrift(weights, contexts, kappa) {
+  if (!(kappa > 0) || !weights.length) return weights;
+  const a = Math.min(Math.max(kappa, 0), 0.95);
+  const out = [weights[0].slice()];
+  for (let i = 1; i < weights.length; i++) {
+    const wDrift = driftWeights(out[i - 1], contexts[i - 1].rVec);
+    out.push(weights[i].map((x, k) => (1 - a) * x + a * wDrift[k]));
+  }
+  return out;
+}
+
+/**
+ * Project a long-only weight vector (Σw = 1) onto the box + group caps
+ * {0 ≤ wᵢ ≤ maxPos, Σ_{i∈s} wᵢ ≤ secCap ∀ sector s} via iterative waterfilling — a
+ * "cap each holding / each sector and redistribute the excess pro-rata to names with
+ * headroom" scheme. Applied POST-optimization (the optimizer runs unconstrained, which is
+ * ~10× faster across a walk-forward than re-enforcing caps inside every hill-climb step).
+ * Cheap (O(iters·n)); deterministic. Approximate only when both caps bind together.
+ */
+function capVector(w, maxPos, secCap, sectorOf) {
+  const n = w.length;
+  const EPS = 1e-9;
+  const nameMax = maxPos < 1 ? maxPos : 1;
+  let x = w.slice();
+  for (let it = 0; it < 100; it++) {
+    let viol = false;
+    // Per-name cap: clip, redistribute excess to names with headroom.
+    if (maxPos < 1) {
+      let excess = 0;
+      for (let i = 0; i < n; i++) if (x[i] > maxPos + EPS) { excess += x[i] - maxPos; x[i] = maxPos; viol = true; }
+      while (excess > EPS) {
+        let head = 0;
+        for (let i = 0; i < n; i++) head += Math.max(0, maxPos - x[i]);
+        if (head < EPS) break;
+        const add = Math.min(excess, head);
+        for (let i = 0; i < n; i++) { const room = Math.max(0, maxPos - x[i]); if (room > 0) x[i] += add * (room / head); }
+        excess -= add;
+      }
+    }
+    // Per-sector cap: scale down over-cap sectors, push excess to under-cap sectors
+    // (respecting the per-name cap so the two don't fight indefinitely).
+    if (secCap < 1) {
+      const sum = {};
+      for (let i = 0; i < n; i++) sum[sectorOf[i]] = (sum[sectorOf[i]] || 0) + x[i];
+      let excess = 0;
+      for (let i = 0; i < n; i++) {
+        const s = sectorOf[i];
+        if (sum[s] > secCap + EPS) { const scale = secCap / sum[s]; excess += x[i] * (1 - scale); x[i] *= scale; viol = true; }
+      }
+      while (excess > EPS) {
+        const sumNow = {};
+        for (let i = 0; i < n; i++) sumNow[sectorOf[i]] = (sumNow[sectorOf[i]] || 0) + x[i];
+        let head = 0;
+        const room = new Array(n);
+        for (let i = 0; i < n; i++) {
+          room[i] = Math.max(0, Math.min(secCap - sumNow[sectorOf[i]], nameMax - x[i]));
+          head += room[i];
+        }
+        if (head < EPS) break;
+        const add = Math.min(excess, head);
+        for (let i = 0; i < n; i++) if (room[i] > 0) x[i] += add * (room[i] / head);
+        excess -= add;
+      }
+    }
+    if (!viol) break;
+  }
+  const s = x.reduce((a, v) => a + v, 0); // renormalize any numerical residual
+  return s > EPS ? x.map(v => v / s) : x;
 }
 
 /**
  * Strategy weight path on a grid (sequential: turnover penalty links steps via drift).
  * mode 'avgMuSharpe' = Max-Sharpe (no tail penalty); 'tailAware' = tail-penalty λ.
  */
-function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIter, rf }) {
+function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIter, rf, constraints = DEFAULT_CONSTRAINTS }) {
   const weights = [];
   for (let i = 0; i < contexts.length; i++) {
     const c = contexts[i];
     const scenarios = Array.from({ length: paths }, () => c.muEq); // empirical = equilibrium-centered
     const currentWeights = kappa > 0 && i > 0 ? driftWeights(weights[i - 1], contexts[i - 1].rVec) : null;
     const { weights: w } = optimizeTailAware(scenarios, c.covMatrix, c.volAssets, {
-      sectorCaps: { ALL: 1 }, maxPositionCap: 1, riskFreeRate: rf,
+      sectorCaps: constraints.sectorCaps, maxPositionCap: constraints.maxPositionCap, riskFreeRate: rf,
       robustMode: mode, tailPenalty, turnoverPenalty: kappa, currentWeights,
       deterministicStarts: true, optimizeMaxIter,
     });
@@ -605,6 +749,77 @@ function costStrategy(weights, contexts, hasLiquidity, rf, benchRets, ppy) {
   const rByStep = contexts.map(c => c.rVec);
   const advByStep = hasLiquidity ? contexts.map(c => c.advVec) : null;
   return buildCostedSeries(grossRets, weights, rByStep, advByStep, rf, benchRets, ppy);
+}
+
+/** Net-headline metric pack shared by the strategy backtests (net primary, gross alongside). */
+const packNet = c => ({
+  annReturn: c.net.annReturn, annVol: c.net.annVol, sharpe: c.net.sharpe,
+  grossSharpe: c.gross.sharpe, grossAnnReturn: c.gross.annReturn,
+  maxDrawdown: c.net.maxDrawdown, infoRatio: c.net.infoRatio, tStat: c.net.tStat,
+  hitRate: c.net.hitRate, trackingError: c.net.trackingError, beta: c.net.beta,
+  annualTurnover: c.annualTurnover, annualCostDrag: c.annualCostDrag,
+});
+
+/** Per-stock return + risk attribution for one strategy's weight path over a context grid. */
+function attributionFor(included, weights, contexts) {
+  const n = included.length;
+  const weightRows = contexts.map((c, i) => {
+    const row = { date: c.t };
+    for (let k = 0; k < n; k++) row[included[k].ticker] = +(weights[i][k] * 100).toFixed(3);
+    return row;
+  });
+  const cByAsset = Array.from({ length: n }, () => []);
+  const grossRets = weights.map((w, i) => {
+    let g = 0;
+    for (let k = 0; k < n; k++) { const cc = w[k] * contexts[i].rVec[k]; cByAsset[k].push(cc); g += cc; }
+    return g;
+  });
+  return buildAttribution(included, weightRows, cByAsset, grossRets);
+}
+
+/**
+ * Shared setup for both strategy backtests: resolve the included universe, liquidity/cost
+ * mode, equilibrium-prior cap mode, the weekly rebalance grid, and the per-step context
+ * inputs (sharedCtx for buildStepContexts). Returns { ok:false, warnings } on bad input
+ * rather than throwing.
+ */
+function prepareStrategyInputs(data, includedTickers, volHalfLife) {
+  const rf = data.riskFreeRate ?? 0.0575;
+  const warnings = [];
+  const byTicker = new Map(data.tickers.map(t => [t.ticker, t]));
+  const included = includedTickers.map(t => byTicker.get(t)).filter(Boolean);
+  if (included.length < 2) return { ok: false, warnings: ['Select at least 2 tickers.'] };
+
+  const dailyRet = included.map(a => dailyLogReturns(a.daily));
+  const dailyDV = included.map(a => ({ dates: a.daily.dates, dv: a.daily.dollarVol ?? null }));
+  const hasLiquidity = dailyDV.every(x => Array.isArray(x.dv) && x.dv.length === x.dates.length);
+  const sharesOut = included.map(a => (Number.isFinite(a.sharesOut) && a.sharesOut > 0 ? a.sharesOut : 0));
+  const nWithShares = sharesOut.filter(s => s > 0).length;
+  const capMode = nWithShares >= Math.ceil(0.7 * included.length) ? 'cap' : 'equal';
+  if (capMode === 'cap' && nWithShares < included.length) {
+    warnings.push(`${included.length - nWithShares} name(s) missing shares-outstanding — given zero equilibrium-prior weight.`);
+  } else if (capMode === 'equal') {
+    warnings.push('Too few names with shares-outstanding — equilibrium prior falls back to equal cap weights.');
+  }
+  if (!hasLiquidity) warnings.push('No dollar-volume in snapshot — using flat per-side transaction cost.');
+
+  const aligned = alignPriceSeries(included.map(a => ({ id: a.ticker, history: a.weekly })));
+  const newestListing = included.reduce((mx, a) => (a.listing > mx ? a.listing : mx), included[0].listing);
+  const backtestStart = addCalendarDays(newestListing, CORR_WINDOW_DAYS);
+  const startIdx = aligned.findIndex(r => r.date >= backtestStart);
+  const rebalanceRows = startIdx >= 0 ? aligned.slice(startIdx) : [];
+  if (rebalanceRows.length < 12) {
+    return { ok: false, warnings: [`Only ${rebalanceRows.length} weekly bars after ${backtestStart} — window too short for a strategy backtest.`] };
+  }
+
+  const benchByKey = new Map();
+  data.benchmark.weekly.dates.forEach((d, i) => {
+    const px = data.benchmark.weekly.adjClose[i];
+    if (px != null) benchByKey.set(canonicalWeeklyKey(d), px);
+  });
+  const corrAssets = included.map(a => ({ ticker: a.ticker, priceHistory: a.weekly }));
+  const sharedCtx = { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife, benchByKey, sharesOut, capMode, rf };
+  return { ok: true, rf, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx };
 }
 
 /**
@@ -627,50 +842,10 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     optimizeMaxIter = 100,          // hill-climb iterations; lower = faster precompute
     volHalfLife = DEFAULT_VOL_HALF_LIFE,
   } = opts;
-  const rf = data.riskFreeRate ?? 0.0575;
-  const warnings = [];
 
-  const byTicker = new Map(data.tickers.map(t => [t.ticker, t]));
-  const included = includedTickers.map(t => byTicker.get(t)).filter(Boolean);
-  if (included.length < 2) return { ok: false, warnings: ['Select at least 2 tickers.'] };
-
-  const dailyRet = included.map(a => dailyLogReturns(a.daily));
-  const dailyDV = included.map(a => ({ dates: a.daily.dates, dv: a.daily.dollarVol ?? null }));
-  const hasLiquidity = dailyDV.every(x => Array.isArray(x.dv) && x.dv.length === x.dates.length);
-  const sharesOut = included.map(a => (Number.isFinite(a.sharesOut) && a.sharesOut > 0 ? a.sharesOut : 0));
-  const nWithShares = sharesOut.filter(s => s > 0).length;
-  // Use cap weights when a strong majority have shares-outstanding; names without it
-  // get zero equilibrium-prior tilt (still investable) rather than dropping cap weighting.
-  const capMode = nWithShares >= Math.ceil(0.7 * included.length) ? 'cap' : 'equal';
-  if (capMode === 'cap' && nWithShares < included.length) {
-    warnings.push(`${included.length - nWithShares} name(s) missing shares-outstanding — given zero equilibrium-prior weight.`);
-  } else if (capMode === 'equal') {
-    warnings.push('Too few names with shares-outstanding — equilibrium prior falls back to equal cap weights.');
-  }
-  if (!hasLiquidity) warnings.push('No dollar-volume in snapshot — using flat per-side transaction cost.');
-
-  const aligned = alignPriceSeries(included.map(a => ({ id: a.ticker, history: a.weekly })));
-  const newestListing = included.reduce((mx, a) => (a.listing > mx ? a.listing : mx), included[0].listing);
-  const backtestStart = addCalendarDays(newestListing, CORR_WINDOW_DAYS);
-  const startIdx = aligned.findIndex(r => r.date >= backtestStart);
-  const rebalanceRows = startIdx >= 0 ? aligned.slice(startIdx) : [];
-  if (rebalanceRows.length < 12) return { ok: false, warnings: [`Only ${rebalanceRows.length} weekly bars after ${backtestStart} — window too short for a strategy backtest.`] };
-
-  const benchByKey = new Map();
-  data.benchmark.weekly.dates.forEach((d, i) => {
-    const px = data.benchmark.weekly.adjClose[i];
-    if (px != null) benchByKey.set(canonicalWeeklyKey(d), px);
-  });
-  const corrAssets = included.map(a => ({ ticker: a.ticker, priceHistory: a.weekly }));
-
-  const sharedCtx = { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife, benchByKey, sharesOut, capMode, rf };
-  const packNet = c => ({
-    annReturn: c.net.annReturn, annVol: c.net.annVol, sharpe: c.net.sharpe,
-    grossSharpe: c.gross.sharpe, grossAnnReturn: c.gross.annReturn,
-    maxDrawdown: c.net.maxDrawdown, infoRatio: c.net.infoRatio, tStat: c.net.tStat,
-    hitRate: c.net.hitRate, trackingError: c.net.trackingError, beta: c.net.beta,
-    annualTurnover: c.annualTurnover, annualCostDrag: c.annualCostDrag,
-  });
+  const prep = prepareStrategyInputs(data, includedTickers, volHalfLife);
+  if (!prep.ok) return { ok: false, warnings: prep.warnings };
+  const { rf, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx } = prep;
 
   const byFrequency = {};
   let lookAheadAny = null;
@@ -752,6 +927,143 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
       'Cap-weight approximation: the equilibrium prior uses current shares-outstanding (Yahoo exposes no history) × point-in-time price.',
       'Return scenarios are equilibrium-centered with the trailing Σ; they are not the production PERT-from-targets distribution.',
     ],
+    warnings,
+  };
+}
+
+// ── live strategy backtest (single frequency, in-browser via Web Worker) ─────────
+//
+// A lighter sibling of runStrategyBacktest for LIVE recompute on a user-selected
+// universe: ONE frequency, ONE tail-λ variant (+ Max-Sharpe, Min-Var, Equal-Wt, IHSG),
+// NO κ-sweep, with per-strategy return/risk attribution and fee drag. Tuned to run in a
+// worker (lower optimizeMaxIter / fewer scenarios) so the full machinery is interactive.
+//
+// κ (turnover penalty) is applied UNIFORMLY as a partial-rebalance blend across Max-Sharpe,
+// Tail and Min-Var (trade only (1−κ) of the way to target) — one consistent, monotone
+// meaning for the toggle. Equal-Wt and IHSG are κ-independent.
+
+/**
+ * @param {object}   data            parsed backtest-history.json
+ * @param {string[]} includedTickers bare symbols
+ * @param {object}   [opts]  { frequency, lambda, kappa, maxPositionCap, priorMode, sectorCap,
+ *                             paths, optimizeMaxIter, volHalfLife, onProgress }
+ * @returns {{ ok, frequency, window, dates, curves, metrics, attribution, fees, strategies, warnings }}
+ */
+export function runLiveStrategy(data, includedTickers, opts = {}) {
+  const {
+    frequency = 'quarterly',
+    lambda = 0.25,                  // selected tail-λ for the single Tail variant
+    kappa = 0,                      // turnover penalty (0 = off); applies to variants + Min-Var
+    paths = 60,                     // scenario count → tail subsample size. Dominant cost lever:
+                                    // ~127ms/call at 60 vs ~244ms at 120; below ~60 the CVaR tail
+                                    // estimate gets noisy. Offline precompute uses 200.
+    optimizeMaxIter = 20,           // hill-climb iters; live default < offline (35) for speed
+    volHalfLife = DEFAULT_VOL_HALF_LIFE,
+    onProgress = null,              // (done, total, label) — forwarded by the worker
+    maxPositionCap = 1,             // per-name weight cap (1 = off); reins in every strategy
+    priorMode = 'cap',             // BL prior reference weights: 'cap' | 'shrunk' | 'equal'
+    sectorCap = null,              // per-sector weight cap (null/≥1 = off); needs SECTOR_MAP
+  } = opts;
+
+  const freq = FREQUENCIES[frequency];
+  if (!freq) return { ok: false, warnings: [`Unknown frequency '${frequency}'.`] };
+
+  const prep = prepareStrategyInputs(data, includedTickers, volHalfLife);
+  if (!prep.ok) return { ok: false, warnings: prep.warnings };
+  const { rf, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx } = prep;
+
+  const grid = rebalanceRows.filter((_, i) => i % freq.step === 0);
+  if (grid.length < 6) return { ok: false, warnings: [`${freq.label}: too few rebalances (${grid.length}).`] };
+  const ppy = freq.periodsPerYear;
+
+  // Caps are enforced POST-optimization (capVector), not inside the optimizer: enforcing
+  // them in every hill-climb step makes a walk-forward ~10× slower (capped Tail goes from
+  // seconds to minutes). Optimize unconstrained, then project each step's target onto the caps.
+  const secCapVal = sectorCap != null && sectorCap < 1 ? sectorCap : 1;
+  const capsActive = maxPositionCap < 1 || secCapVal < 1;
+  const sectorOf = included.map(a => SECTOR_MAP[a.ticker] ?? 'Other');
+  const capPath = weights => (capsActive ? weights.map(w => capVector(w, maxPositionCap, secCapVal, sectorOf)) : weights);
+
+  // Feasibility: the most that can be invested while honoring the caps is
+  // Σ_sectors min(secCap, namesInSector × maxPos), bounded by n × maxPos. If that's < 1 the
+  // caps can't sum to 100%, so capVector's renormalize would scale weights back over the cap.
+  // Warn rather than silently present a cap-violating portfolio.
+  if (capsActive) {
+    const bySector = {};
+    for (const s of sectorOf) bySector[s] = (bySector[s] || 0) + 1;
+    let maxInvest = 0;
+    for (const s in bySector) maxInvest += Math.min(secCapVal, bySector[s] * maxPositionCap);
+    maxInvest = Math.min(maxInvest, included.length * maxPositionCap);
+    if (maxInvest < 1 - 1e-6) {
+      warnings.push(`Caps too tight for this universe — at most ${(maxInvest * 100).toFixed(0)}% is investable under the chosen stock/sector caps, so the optimized strategies can't fully honor them (loosen a cap or add names).`);
+    }
+  }
+
+  const { contexts, lookAhead } = buildStepContexts(grid, { ...sharedCtx, priorMode });
+  if (lookAhead) warnings.push(`Look-ahead guard tripped: ${lookAhead}`);
+  const benchRets = contexts.map(c => c.ihsgRet);
+  const dates = [...contexts.map(c => c.t), grid[grid.length - 1].date];
+  const round2 = arr => arr.map(v => +v.toFixed(2));
+  const n = included.length;
+
+  const total = 4; // optimized + baseline strategies that report progress
+  let done = 0;
+  const progress = label => { if (onProgress) onProgress(done, total, label); };
+
+  const curves = {}, metrics = {}, attribution = {}, fees = {};
+  const addStrategy = (key, weights) => {
+    const costed = costStrategy(weights, contexts, hasLiquidity, rf, benchRets, ppy);
+    curves[key] = { grossEq: round2(costed.grossEq), netEq: round2(costed.netEq) };
+    metrics[key] = packNet(costed);
+    attribution[key] = attributionFor(included, weights, contexts);
+    const gFin = costed.grossEq[costed.grossEq.length - 1];
+    const nFin = costed.netEq[costed.netEq.length - 1];
+    fees[key] = { annualCostDrag: costed.annualCostDrag, annualTurnover: costed.annualTurnover, totalFee: +(gFin - nFin).toFixed(2) };
+  };
+
+  // Optimized variants (heavy): Max-Sharpe + the selected tail-λ. Optimize UNPENALIZED
+  // (kappa: 0), then apply the uniform partial-rebalance blend so κ acts identically across
+  // strategies — the avgMuSharpe (Max-Sharpe) objective ignores the optimizer's native
+  // turnover term, so relying on it would silently leave Max-Sharpe un-penalized.
+  progress('Optimizing Max-Sharpe…');
+  addStrategy('MaxSharpe', capPath(blendTowardDrift(
+    walkVariant(contexts, { mode: 'avgMuSharpe', tailPenalty: 0, kappa: 0, paths, optimizeMaxIter, rf }), contexts, kappa)));
+  done += 1;
+  progress(`Optimizing Tail λ=${lambda}…`);
+  addStrategy('Tail', capPath(blendTowardDrift(
+    walkVariant(contexts, { mode: 'tailAware', tailPenalty: lambda, kappa: 0, paths, optimizeMaxIter, rf }), contexts, kappa)));
+  done += 1;
+
+  // Baselines: Min-Var honors κ via the same blend (minVarTurnoverPenalized) then the caps;
+  // Equal-Wt is a constant target (already satisfies any cap with this universe).
+  progress('Min-variance…');
+  addStrategy('MinVar', capPath(walkMinVar(contexts, kappa)));
+  done += 1;
+  addStrategy('EqualWeight', contexts.map(() => Array(n).fill(1 / n)));
+  done += 1;
+  progress('Finalizing…');
+
+  // IHSG (index — net == gross, no attribution).
+  const ihEq = cumEquity(benchRets);
+  const ihMetrics = seriesMetrics(benchRets, ihEq[ihEq.length - 1], rf, null, ppy);
+  curves.IHSG = { eq: round2(ihEq) };
+  metrics.IHSG = { ...ihMetrics, grossSharpe: ihMetrics.sharpe, grossAnnReturn: ihMetrics.annReturn, annualTurnover: 0, annualCostDrag: 0 };
+
+  return {
+    ok: true,
+    frequency,
+    params: { lambda, kappa, maxPositionCap, priorMode, sectorCap, paths, optimizeMaxIter, capMode, costModel: hasLiquidity ? 'liquidity-aware' : 'flat' },
+    window: {
+      start: dates[0], end: dates[dates.length - 1], newestListing,
+      nRebalances: grid.length, nTickers: n, riskFreeRate: rf,
+      costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
+    },
+    dates,
+    curves,
+    metrics,
+    attribution,
+    fees,
+    strategies: ['MaxSharpe', 'Tail', 'MinVar', 'EqualWeight', 'IHSG'],
     warnings,
   };
 }
