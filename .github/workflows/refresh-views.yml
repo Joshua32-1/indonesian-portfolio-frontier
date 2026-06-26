@@ -6,9 +6,10 @@ name: Capture Analyst Views
 # (analyst-view) κ-replay needs. Capturing weekly keeps the finest replay grid open.
 
 on:
-  # Mondays at 11:00 UTC = 18:00 WIB (after IDX close); one capture per week.
+  # Sundays at 11:00 UTC = 18:00 WIB; one capture per week, aligned with the
+  # weekly rebalance run (and an hour before it).
   schedule:
-    - cron: '0 11 * * 1'
+    - cron: '0 11 * * 0'
   # Allow manual trigger from GitHub UI.
   workflow_dispatch:
 

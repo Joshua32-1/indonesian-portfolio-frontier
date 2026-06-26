@@ -1,13 +1,15 @@
 name: Weekly Rebalance PR
 
-# Re-runs the optimizer headlessly every Monday and opens a PR with the new
-# portfolios.json weights for human review. Nothing reaches production until the
-# PR is merged (which triggers the Vercel redeploy).
+# Re-runs the optimizer headlessly every Sunday and opens a PR with the new
+# portfolios.json weights for human review, so the PR is ready to merge before
+# Monday's market open. Nothing reaches production until the PR is merged (which
+# triggers the Vercel redeploy).
 
 on:
-  # Mondays 12:00 UTC = 19:00 WIB — after the daily snapshot refresh (11:00 UTC)
+  # Sundays 12:00 UTC = 19:00 WIB — fetches its own snapshot (Friday close); PR
+  # ready to merge before Monday open.
   schedule:
-    - cron: '0 12 * * 1'
+    - cron: '0 12 * * 0'
   workflow_dispatch:
     inputs:
       effective:

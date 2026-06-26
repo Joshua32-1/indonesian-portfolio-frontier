@@ -22,12 +22,13 @@ This is a genuine **out-of-sample** test — the optimizer was built and calibra
 
 ---
 
-## Rebalance protocol — automated, every Monday
+## Rebalance protocol — automated, every Sunday
 
 Rebalances run **automatically** — no local optimizer run needed.
 
 [`.github/workflows/weekly-rebalance.yml`](.github/workflows/weekly-rebalance.yml)
-runs Mondays at 12:00 UTC (19:00 WIB) and:
+runs Sundays at 12:00 UTC (19:00 WIB) — the new weights become effective on Monday's
+first trading bar — and:
 
 1. Fetches a fresh optimizer snapshot (Yahoo prices, analyst targets, BI-Rate).
 2. Runs [`portfolio-app/scripts/optimize.mjs`](portfolio-app/scripts/optimize.mjs)
@@ -133,7 +134,7 @@ These rules protect the integrity of the out-of-sample test:
 Inception:      2026-06-08
 Strategies:     max-sharpe, min-var, tail-10, tail-20, tail-35, tail-50
 BI-Rate (rf):   5.75% (portfolios.json → riskFreeRate: 0.0575)
-Rebalance:      Automated weekly PR, Mondays 12:00 UTC via .github/workflows/weekly-rebalance.yml
+Rebalance:      Automated weekly PR, Sundays 12:00 UTC via .github/workflows/weekly-rebalance.yml
 CI snapshot:    Weekdays 11:00 UTC (18:00 WIB) via .github/workflows/refresh-dashboard.yml
 Optimizer cfg:  portfolio-app/optimizer-config.json · scripts/optimize.mjs
 3-month check:  2026-09-08
