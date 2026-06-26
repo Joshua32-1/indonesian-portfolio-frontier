@@ -31,9 +31,38 @@ const ATTR_STRATS = ['MaxSharpe', 'Tail', 'MinVar', 'EqualWeight'];
 const POS_CAPS = [{ value: 1, label: 'Off' }, { value: 0.2, label: '20%' }, { value: 0.15, label: '15%' }, { value: 0.1, label: '10%' }];
 const PRIORS = [{ value: 'cap', label: 'Market-cap' }, { value: 'shrunk', label: 'Shrunk 50/50' }, { value: 'equal', label: 'Equal-weight' }];
 
+// Comparison grid: κ (rows) × prior (cols), at reduced fidelity for a faster sweep.
+const GRID_KAPPAS = [0, 0.1, 0.25, 0.5];
+const GRID_PATHS = 40;
+const GRID_ITER = 12;
+const PRIOR_LABEL = { cap: 'Market-cap', shrunk: 'Shrunk', equal: 'Equal' };
+
+// Cache key includes the fidelity (paths / iters) so reduced-fidelity grid cells never collide
+// with full-fidelity main-screen runs sharing the same universe/freq/λ/κ/caps/prior.
 const sig = (c) =>
-  `${[...c.included].sort().join(',')}|${c.frequency}|${c.lambda}|${c.kappa}|${c.maxPositionCap}|${c.priorMode}|${c.sectorCap}`;
+  `${[...c.included].sort().join(',')}|${c.frequency}|${c.lambda}|${c.kappa}|${c.maxPositionCap}|${c.priorMode}|${c.sectorCap}|${c.paths ?? 'd'}|${c.optimizeMaxIter ?? 'd'}`;
 const stratLabel = (key, lambda) => (key === 'Tail' ? `Tail λ=${lambda}` : STRAT_META[key].label);
+
+// Pivot a runLiveStrategy result into Recharts rows + series for the chosen fee mode (shared by
+// the main chart and the grid cells).
+function curveSeries(result, { width = 1.9, ihsgWidth = 1.4 } = {}) {
+  return result.strategies.map(k => ({
+    key: k, label: stratLabel(k, result.params.lambda), color: STRAT_META[k].color,
+    width: k === 'IHSG' ? ihsgWidth : width, dash: k === 'IHSG' ? '5 4' : undefined,
+  }));
+}
+function curveRows(result, feeMode) {
+  return result.dates.map((d, i) => {
+    const row = { date: d };
+    for (const k of result.strategies) {
+      const c = result.curves[k];
+      if (!c) continue;
+      const arr = k === 'IHSG' ? c.eq : (feeMode === 'gross' ? c.grossEq : c.netEq);
+      row[k] = arr?.[i];
+    }
+    return row;
+  });
+}
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -55,44 +84,60 @@ export default function App() {
   const [progress, setProgress] = useState(null); // { done, total, label }
   const [runError, setRunError] = useState(null);
 
+  // Comparison grid (κ × prior small-multiples).
+  const [gridResults, setGridResults] = useState(null); // Map cellKey → result | 'computing'
+  const [gridProgress, setGridProgress] = useState(null); // { done, total }
+  const [gridMeta, setGridMeta] = useState(null);         // { frequency } the grid was generated at
+
   const workerRef = useRef(null);
-  const jobRef = useRef(0);            // monotonic job id; results from older ids are ignored
-  const pendingRef = useRef(null);     // { id, key } of the in-flight job
-  const cacheRef = useRef(new Map());  // signature → result
+  const jobRef = useRef(0);             // monotonic job id source for ALL jobs (main + grid)
+  const mainJobRef = useRef(0);         // id of the latest MAIN job (for display stale-guarding)
+  const gridGenRef = useRef(0);         // token for the latest grid generation
+  const pendingMapRef = useRef(new Map()); // id → { kind:'main'|'grid', key, cellKey?, gen? }
+  const cacheRef = useRef(new Map());   // signature → result
 
   // Spin up the worker once.
   useEffect(() => {
     const worker = new Worker(new URL('./backtestWorker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (e) => {
       const msg = e.data || {};
-      if (msg.id !== jobRef.current) return; // stale job — ignore
+      const p = pendingMapRef.current.get(msg.id);
+      if (!p) return; // unknown / already-handled id
+
       if (msg.type === 'progress') {
-        setProgress({ done: msg.done, total: msg.total, label: msg.label });
-      } else if (msg.type === 'result') {
-        const key = pendingRef.current?.key;
-        if (key) cacheRef.current.set(key, msg.result);
-        setResult(msg.result);
-        setShownKey(key);
+        if (p.kind === 'main' && msg.id === mainJobRef.current) {
+          setProgress({ done: msg.done, total: msg.total, label: msg.label });
+        }
+        return;
+      }
+      pendingMapRef.current.delete(msg.id);
+
+      if (p.kind === 'main') {
+        if (msg.id !== mainJobRef.current) return; // superseded by a newer main run — drop it
+        if (msg.type === 'error') { setRunError(msg.message); }
+        else { cacheRef.current.set(p.key, msg.result); setResult(msg.result); setShownKey(p.key); }
         setRunning(false);
         setProgress(null);
-      } else if (msg.type === 'error') {
-        setRunError(msg.message);
-        setRunning(false);
-        setProgress(null);
+      } else if (p.kind === 'grid' && p.gen === gridGenRef.current) {
+        const cell = msg.type === 'error' ? { ok: false, warnings: [msg.message] } : msg.result;
+        if (msg.type === 'result') cacheRef.current.set(p.key, msg.result);
+        setGridResults(prev => { const n = new Map(prev); n.set(p.cellKey, cell); return n; });
+        setGridProgress(prev => (prev ? { done: prev.done + 1, total: prev.total } : prev));
       }
     };
     workerRef.current = worker;
     return () => worker.terminate();
   }, []);
 
-  // Run (or replay from cache) a backtest for an explicit configuration object.
+  // Run (or replay from cache) a MAIN backtest for an explicit configuration object.
   const runWith = useCallback((cfg) => {
     if (cfg.included.length < 2) return;
     const key = sig(cfg);
     const cached = cacheRef.current.get(key);
     if (cached) { setResult(cached); setShownKey(key); setRunError(null); return; }
     const id = ++jobRef.current;
-    pendingRef.current = { id, key };
+    mainJobRef.current = id;
+    pendingMapRef.current.set(id, { kind: 'main', key });
     setRunError(null);
     setRunning(true);
     setProgress({ done: 0, total: 4, label: 'Starting…' });
@@ -123,6 +168,39 @@ export default function App() {
   const selectLongHistory = () =>
     setIncluded(new Set(data.tickers.filter(t => t.listing <= LONG_HISTORY_CUTOFF).map(t => t.ticker)));
 
+  // Build the κ × prior comparison grid at the current frequency/λ/caps/universe. Cells reuse the
+  // cache (instant if already run at grid fidelity); misses are posted to the single worker, which
+  // runs them sequentially and streams results back tagged with this generation token.
+  const generateGrid = () => {
+    const inc = [...included];
+    if (inc.length < 2) return;
+    const gen = ++gridGenRef.current;
+    const initial = new Map();
+    let done = 0, total = 0;
+    for (const k of GRID_KAPPAS) {
+      for (const p of PRIORS) {
+        total += 1;
+        const cellKey = `${k}|${p.value}`;
+        const cfg = {
+          included: inc, frequency, lambda, kappa: k, maxPositionCap: posCap, priorMode: p.value,
+          sectorCap, paths: GRID_PATHS, optimizeMaxIter: GRID_ITER,
+        };
+        const key = sig(cfg);
+        const cached = cacheRef.current.get(key);
+        if (cached) { initial.set(cellKey, cached); done += 1; }
+        else {
+          initial.set(cellKey, 'computing');
+          const id = ++jobRef.current;
+          pendingMapRef.current.set(id, { kind: 'grid', key, cellKey, gen });
+          workerRef.current.postMessage({ id, ...cfg });
+        }
+      }
+    }
+    setGridMeta({ frequency });
+    setGridResults(initial);
+    setGridProgress({ done, total });
+  };
+
   const newestIncluded = useMemo(() => {
     if (!data) return null;
     let best = null, bestDate = '0000-00-00';
@@ -139,26 +217,15 @@ export default function App() {
   const currentKey = sig(currentCfg);
   const stale = !running && shownKey !== null && shownKey !== currentKey;
   const onRun = () => runWith(currentCfg);
+  const gridRunning = gridProgress && gridProgress.done < gridProgress.total;
 
   const ok = result?.ok;
   const w = ok ? result.window : null;
   const strategies = ok ? result.strategies : [];
 
-  // Equity-curve chart rows + series for the selected fee mode.
-  const series = strategies.map(k => ({
-    key: k, label: stratLabel(k, result.params.lambda), color: STRAT_META[k].color,
-    width: k === 'IHSG' ? 1.4 : 1.9, dash: k === 'IHSG' ? '5 4' : undefined,
-  }));
-  const chart = ok ? result.dates.map((d, i) => {
-    const row = { date: d };
-    for (const k of strategies) {
-      const c = result.curves[k];
-      if (!c) continue;
-      const arr = k === 'IHSG' ? c.eq : (feeMode === 'gross' ? c.grossEq : c.netEq);
-      row[k] = arr?.[i];
-    }
-    return row;
-  }) : [];
+  // Equity-curve chart rows + series for the selected fee mode (shared helpers).
+  const series = ok ? curveSeries(result) : [];
+  const chart = ok ? curveRows(result, feeMode) : [];
   const cols = series.map(({ key, label, color }) => ({ key, label, color }));
 
   const attr = ok ? result.attribution?.[attrStrategy] : null;
@@ -219,8 +286,7 @@ export default function App() {
               <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 8 }}>
                 Heavy passes (Max-Sharpe + Tail) run off the main thread — est. <b>{FREQ_HINT[frequency]}</b> for the
                 full-history universe; fewer names or a coarser frequency is faster. Min-Var, Equal-Wt &amp; IHSG are quick.
-                {priorMode === 'equal' && <> · <span style={{ color: '#A78BFA' }}>Equal prior + no views ⇒ Max-Sharpe ≈ Equal-Wt.</span></>}
-                {priorMode !== 'cap' && <> · Prior moves Max-Sharpe &amp; Tail only — Min-Var ignores returns.</>}
+                {priorMode !== 'cap' && <> · <span style={{ color: '#A78BFA' }}>Prior shifts Max-Sharpe &amp; Tail only (Min-Var ignores returns). Equal prior + no views ⇒ Max-Sharpe ≈ Equal-Wt (the equilibrium tangency); Shrunk sits between cap-weights and equal.</span></>}
                 {(posCap < 1 || sectorCap < 1) && <> · Caps reduce concentration (all strategies) but trim in-sample return.</>}
               </div>
             )}
@@ -327,6 +393,60 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* Comparison grid: turnover κ (rows) × prior (cols), 4 strategies overlaid per cell. */}
+      <div style={{ ...panel, marginTop: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <SectionTitle>STRATEGY COMPARISON GRID — turnover κ × prior{gridMeta ? ` · ${gridMeta.frequency}` : ''}</SectionTitle>
+          <button onClick={generateGrid} disabled={gridRunning || included.size < 2} style={{
+            ...runBtn, marginLeft: 0,
+            background: gridRunning ? '#1E3A5F' : '#2563EB',
+            color: gridRunning ? '#7DA8C7' : '#E2E8F0',
+            cursor: gridRunning || included.size < 2 ? 'default' : 'pointer',
+            opacity: included.size < 2 ? 0.5 : 1,
+          }}>{gridRunning ? `Generating… ${gridProgress.done}/${gridProgress.total}` : (gridResults ? 'Regenerate grid' : 'Generate grid')}</button>
+        </div>
+        <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 4 }}>
+          {GRID_KAPPAS.length}×{PRIORS.length} = {GRID_KAPPAS.length * PRIORS.length} cells at <b>{frequency}</b>, reduced fidelity —
+          each overlays Max-Sharpe, Tail λ={lambda}, Min-Var, Equal-Wt, IHSG at the current λ/caps/universe.
+          Quarterly ~1–2 min; weekly is slow. Re-running a config is instant (cached).
+        </div>
+
+        {gridRunning && (
+          <div style={{ height: 6, background: '#0A1628', borderRadius: 3, overflow: 'hidden', marginTop: 8 }}>
+            <div style={{ height: '100%', width: `${Math.round((gridProgress.done / gridProgress.total) * 100)}%`, background: '#2563EB', transition: 'width .2s' }} />
+          </div>
+        )}
+
+        {gridResults && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${PRIORS.length}, 1fr)`, gap: 10, marginTop: 12 }}>
+              {GRID_KAPPAS.flatMap(k => PRIORS.map(p => {
+                const cell = gridResults.get(`${k}|${p.value}`);
+                return (
+                  <div key={`${k}|${p.value}`} style={miniPanel}>
+                    <div style={miniTitle}>κ {k === 0 ? 'off' : k} · {PRIOR_LABEL[p.value]}</div>
+                    {!cell || cell === 'computing'
+                      ? <div style={miniPlaceholder}>computing…</div>
+                      : !cell.ok
+                        ? <div style={{ ...miniPlaceholder, color: '#F59E0B' }}>{(cell.warnings || ['failed'])[0]}</div>
+                        : <EquityCurveChart chart={curveRows(cell, feeMode)} series={curveSeries(cell, { width: 1.5, ihsgWidth: 1.1 })} height={150} showLegend={false} />}
+                  </div>
+                );
+              }))}
+            </div>
+            <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 8 }}>
+              {['MaxSharpe', 'Tail', 'MinVar', 'EqualWeight', 'IHSG'].map(key => (
+                <span key={key} style={{ marginRight: 12, whiteSpace: 'nowrap' }}>
+                  <span style={{ display: 'inline-block', width: 10, height: 2, background: STRAT_META[key].color, verticalAlign: 'middle', marginRight: 4 }} />
+                  {key === 'Tail' ? `Tail λ=${lambda}` : STRAT_META[key].label}
+                </span>
+              ))}
+              · {feeMode === 'net' ? 'net of costs' : 'gross'} · rows = κ, columns = prior
+            </div>
+          </>
+        )}
+      </div>
     </Shell>
   );
 }
@@ -379,6 +499,9 @@ const selBtn = { border: '1px solid #1E3A5F', borderRadius: 5, fontSize: 11, fon
 const miniBtn = { flex: 1, border: '1px solid #1E3A5F', borderRadius: 5, background: 'transparent', color: '#7DA8C7', fontSize: 10, fontWeight: 700, cursor: 'pointer', padding: '4px 2px' };
 const runBtn = { border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 800, padding: '6px 16px', marginLeft: 'auto' };
 const feeCard = { background: '#0A1A2E', border: '1px solid #122845', borderRadius: 8, padding: '8px 12px', minWidth: 120 };
+const miniPanel = { background: '#0A1A2E', border: '1px solid #122845', borderRadius: 8, padding: '8px 8px 4px' };
+const miniTitle = { fontSize: 10, fontWeight: 700, color: '#9FB8CC', marginBottom: 2 };
+const miniPlaceholder = { height: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#46617B' };
 
 function Shell({ children }) {
   return (

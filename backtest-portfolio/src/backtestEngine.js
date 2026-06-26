@@ -38,6 +38,11 @@ const CORR_WINDOW_DAYS = 365; // trailing 1-year weekly correlation window
 // a tighter bundle when the user sets a position or sector cap.
 const DEFAULT_CONSTRAINTS = { sectorCaps: { ALL: 1 }, maxPositionCap: 1 };
 
+// Shares-outstanding fallback for names Yahoo returns 0/null for (else they'd get 0% equilibrium-
+// prior weight — a real large-cap silently dropped from the cap prior). BNGA = Bank CIMB Niaga;
+// Yahoo's sharesOutstanding is 0, but impliedSharesOutstanding & marketCap/price both give ~25.285B.
+const SHARES_FALLBACK = { BNGA: 25_285_000_000 };
+
 // Static ticker → sector labels (sourced from the optimizer's live-market-snapshot.json,
 // assets[].sector). The backtest snapshot carries no sector field, and the universe is a
 // fixed ≤25-name large-cap set, so a checked-in map is sufficient for sector caps.
@@ -606,7 +611,14 @@ function buildStepContexts(grid, ctx) {
       capW = priorMode === 'shrunk' ? capRaw.map((v, k) => 0.5 * v + 0.5 * equalW[k]) : capRaw;
     }
     const delta = defaultDelta(covMatrix, capW, rf);
-    const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rf, delta });
+    // computeEquilibriumReturns returns EXCESS returns (π = δ·Σ·w). The shared Sharpe objective
+    // subtracts r_f (it expects TOTAL returns), so feed total returns by adding r_f back: since the
+    // book is fully invested (Σw=1), wᵀ(π+r_f) − r_f = wᵀπ, exactly cancelling the subtraction and
+    // restoring the true tangency. Without this, the −r_f/σ term rewards variance → Max-Sharpe/Tail
+    // blow out into concentrated, high-turnover portfolios. (Tail's CVaR gap is not strictly
+    // shift-invariant — realized returns are lognormal in μ — but the +r_f gross-up is near-uniform
+    // across weights, ≈ a ~r_f λ-rescale, immaterial to the tail optimum.)
+    const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rf, delta }).map(v => v + rf);
 
     const rVec = included.map(a => {
       const p0 = row[a.ticker], p1 = rowNext[a.ticker];
@@ -793,7 +805,10 @@ function prepareStrategyInputs(data, includedTickers, volHalfLife) {
   const dailyRet = included.map(a => dailyLogReturns(a.daily));
   const dailyDV = included.map(a => ({ dates: a.daily.dates, dv: a.daily.dollarVol ?? null }));
   const hasLiquidity = dailyDV.every(x => Array.isArray(x.dv) && x.dv.length === x.dates.length);
-  const sharesOut = included.map(a => (Number.isFinite(a.sharesOut) && a.sharesOut > 0 ? a.sharesOut : 0));
+  const sharesOut = included.map(a => {
+    const s = Number.isFinite(a.sharesOut) && a.sharesOut > 0 ? a.sharesOut : (SHARES_FALLBACK[a.ticker] ?? 0);
+    return s;
+  });
   const nWithShares = sharesOut.filter(s => s > 0).length;
   const capMode = nWithShares >= Math.ceil(0.7 * included.length) ? 'cap' : 'equal';
   if (capMode === 'cap' && nWithShares < included.length) {
