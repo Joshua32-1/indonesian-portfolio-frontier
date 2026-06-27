@@ -1,15 +1,20 @@
 /**
  * backtestEngine.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Pure-JS covariance-only walk-forward backtest. No React / DOM / I/O.
+ * Pure-JS, cost-aware walk-forward backtest engine. No React / DOM / I/O. Three entry points
+ * over the same per-step machinery: runBacktest (live min-variance vs equal-weight vs IHSG
+ * explorer); runStrategyBacktest (precompute — the production tail-aware machinery: Max-Sharpe
+ * + tail-λ variants — across weekly/monthly/quarterly with a turnover-penalty κ sweep); and
+ * runLiveStrategy (single-frequency, in-browser Web Worker sibling).
  *
- * For each weekly rebalance date t (using ONLY data ≤ t — no look-ahead):
+ * For each rebalance date t (using ONLY data ≤ t — no look-ahead):
  *   ρ  = weekly Pearson over the trailing 1 year      (computeCorrelationFromDateRange)
- *   σ  = theta-decay daily vol, halfLife 63, 252d      (resolveDailyVol/computeThetaDecayedVol)
+ *   σ  = theta-decay daily vol, halfLife 63, 252d      (computeThetaDecayedVol)
  *   Σ  = ρ·σ·σ with Ledoit-Wolf shrinkage              (computeCovarianceMatrix)
- *   w  = min-variance, long-only, sum-to-1, no caps    (findMinVariancePortfolio, deterministic)
- * then hold one week and book the realized return. Equal-weight and IHSG are tracked
- * alongside. Returns are GROSS (no transaction costs).
+ *   w  = strategy weights (min-var / Max-Sharpe / tail-λ, per entry point)
+ * then hold to the next rebalance and book the realized return. Returns are reported NET of an
+ * IDX transaction-cost model (liquidity-aware half-spread + asymmetric buy/sell fees on
+ * drift-adjusted turnover), with GROSS shown alongside. Equal-weight and IHSG are tracked too.
  *
  * Optional turnover penalty (opts.kappa > 0): the min-variance step is penalized toward
  * the drifted prior weights (minVarTurnoverPenalized), trading a little variance for less

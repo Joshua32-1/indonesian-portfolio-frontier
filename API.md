@@ -75,7 +75,7 @@ Same top level (`generated`, `benchmark`, `assets[]`) but each asset carries onl
 
 ## 2. `portfolios.json`
 
-Path: `live-dashboard-portfolio/data/portfolios.json`. **Manually maintained, append-only.** The dashboard reads it to build stitched index series.
+Path: `live-dashboard-portfolio/data/portfolios.json`. **Append-only**, written either by hand or automatically by the weekly rebalance Action (`portfolio-app/scripts/optimize.mjs` → appends a dated row per strategy). The dashboard reads it to build stitched index series.
 
 ```jsonc
 {

@@ -16,7 +16,7 @@ The optimizer's edge has three layers. Only two are backtestable here:
 
 The analyst-target signal **cannot be historicized** — only today's targets exist in the snapshot, so applying them to the past would be look-ahead. The backtest therefore runs **machinery-only**: the tail-aware objective is driven by an empirical, equilibrium-centered return distribution with the trailing covariance, not by analyst views.
 
-**The alpha signal is instead validated forward**, by the live dashboard (`live-dashboard-portfolio/`), which began tracking on **2026-06-29**. Point-in-time analyst snapshots are now archived (`portfolio-app/data/archive/`) so a *true* full-strategy retro-backtest becomes possible once enough history accumulates.
+**The alpha signal is instead validated forward**, by the live dashboard (`live-dashboard-portfolio/`), which began tracking on **2026-06-29**. Point-in-time analyst views are now captured weekly (`portfolio-app/data/view-history/`) so a *true* full-strategy retro-backtest becomes possible once enough history accumulates.
 
 ## Commands
 
