@@ -20,10 +20,30 @@ import { DEFAULT_TAIL_PENALTY } from './simConfig.js';
 
 export const ROBUST_SUBSAMPLE_SIZE = 1000;
 
-/** Box-Muller standard-normal sampler (internal). */
-function normalRand() {
+/**
+ * Seedable PRNG (mulberry32) — returns a function () → float ∈ [0, 1).
+ *
+ * Opt-in: callers that want byte-reproducible draws build one of these and pass
+ * it down as `rng`. When omitted, the samplers default to `Math.random`, so the
+ * production optimizer and the validation suite are byte-identical to before.
+ *
+ * @param {number} seed  32-bit unsigned seed
+ * @returns {() => number}
+ */
+export function makeRng(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Box-Muller standard-normal sampler (internal). `rng` defaults to Math.random. */
+function normalRand(rng = Math.random) {
   let u, v, s;
-  do { u = 2 * Math.random() - 1; v = 2 * Math.random() - 1; s = u * u + v * v; }
+  do { u = 2 * rng() - 1; v = 2 * rng() - 1; s = u * u + v * v; }
   while (s >= 1 || s === 0);
   return u * Math.sqrt((-2 * Math.log(s)) / s);
 }
@@ -41,12 +61,16 @@ function normalRand() {
  *
  * @param {number[][]} choleskyL  — lower-triangular Cholesky factor (n × n)
  * @param {number}     nPaths     — number of shock vectors to draw
+ * @param {() => number} [rng]    — uniform sampler; defaults to Math.random (pass a
+ *                                  makeRng(seed) for reproducible draws)
  * @returns {number[][]}           nPaths × n matrix of correlated shocks
  */
-export function drawCorrelatedShocks(choleskyL, nPaths) {
+export function drawCorrelatedShocks(choleskyL, nPaths, rng = Math.random) {
   const n = choleskyL.length;
   return Array.from({ length: nPaths }, () => {
-    const z = Array.from({ length: n }, normalRand);
+    // NB: an explicit arrow is required — Array.from passes (elem, index) to its
+    // callback, so a bare `normalRand` reference would bind rng = index.
+    const z = Array.from({ length: n }, () => normalRand(rng));
     // L·z: row i of L dotted with z
     return choleskyL.map(row => row.reduce((s, lij, j) => s + lij * z[j], 0));
   });

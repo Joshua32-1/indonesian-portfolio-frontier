@@ -47,6 +47,17 @@ const iterIdx = args.indexOf('--iterations');
 const iterOverride = iterIdx >= 0 ? Number(args[iterIdx + 1]) : null;
 const pathsIdx = args.indexOf('--paths');
 const pathsOverride = pathsIdx >= 0 ? Number(args[pathsIdx + 1]) : null;
+// Methodology matrix flags (resolved against config defaults after cfg loads):
+//   --methodology pert|bl   pert = legacy PERT consensus (BL off); bl = Black-Litterman
+//   --prior-mode cap|shrunk|equal   BL equilibrium prior (bl only)
+//   --tau <number>          BL prior-vs-views blend (bl only)
+const argVal = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null; };
+const methodologyArg = argVal('--methodology');
+const priorModeArg   = argVal('--prior-mode');
+const tauArg         = argVal('--tau');
+// --emit <file>: write this config's streams to an artifact instead of appending
+// portfolios.json (so parallel cron jobs never clobber the shared file).
+const emitArg        = argVal('--emit');
 const effIdx = args.indexOf('--effective');
 const effective =
   (effIdx >= 0 && args[effIdx + 1]) ? args[effIdx + 1]
@@ -74,6 +85,24 @@ if (assets.length < 2) {
 
 // Merge config onto module defaults (config wins)
 const factorConfig   = { ...DEFAULT_FACTOR_CONFIG, ...(cfg.factorConfig ?? {}) };
+
+// ── Resolve methodology matrix (CLI > config default) ───────────────────────────
+const methodology = methodologyArg ?? (factorConfig.useFactorModel ? 'bl' : 'pert');
+if (!['pert', 'bl'].includes(methodology)) {
+  console.error(`Invalid --methodology: "${methodology}" (expected pert|bl)`); process.exit(1);
+}
+const priorMode = priorModeArg ?? 'cap';
+if (!['cap', 'shrunk', 'equal'].includes(priorMode)) {
+  console.error(`Invalid --prior-mode: "${priorMode}" (expected cap|shrunk|equal)`); process.exit(1);
+}
+const tau = tauArg != null ? Number(tauArg) : (factorConfig.tau ?? 0.03);
+if (!(tau > 0)) { console.error(`Invalid --tau: "${tauArg}" (expected positive number)`); process.exit(1); }
+// Apply to the factor config: BL on/off + τ. (PERT ⇒ BL inactive ⇒ prior/τ are no-ops.)
+factorConfig.useFactorModel = methodology === 'bl';
+if (methodology === 'bl') factorConfig.tau = tau;
+// Config tag for composite ids: `pert` or `bl-<prior>-t<NN>` (NN = round(τ·100), e.g. t03).
+const tauTag = String(Math.round(tau * 100)).padStart(2, '0');
+const configTag = methodology === 'pert' ? 'pert' : `bl-${priorMode}-t${tauTag}`;
 const simConfig      = { ...DEFAULT_SIM_CONFIG, ...(cfg.simConfig ?? {}) };
 if (pathsOverride) simConfig.optimizerPaths = pathsOverride;
 const iterations     = iterOverride ?? cfg.mcIterations ?? 100000;
@@ -90,6 +119,7 @@ console.log(`  assets:         ${assets.length}  ·  rf=${(riskFreeRate * 100).t
 console.log(`  iterations:     ${iterations.toLocaleString('en-US')}`);
 console.log(`  corr window:    ${corrStart} → ${corrEnd}  ·  volHalfLife=${volHalfLife}`);
 console.log(`  factor model:   ${factorConfig.useFactorModel ? 'ON (BL τ=' + factorConfig.tau + ')' : 'OFF (legacy PERT)'}`);
+console.log(`  methodology:    ${methodology}  ·  prior=${methodology === 'bl' ? priorMode : '—'}  ·  tag=${configTag}`);
 console.log(`  robust:         ${simConfig.robustMode}  ·  λ=${simConfig.tailPenalty}  ·  paths=${simConfig.optimizerPaths}`);
 
 // ── Correlation + covariance ────────────────────────────────────────────────
@@ -119,6 +149,7 @@ const result = runMonteCarloSimulation({
   tailPenalty:         simConfig.tailPenalty,
   deterministicStarts: simConfig.deterministicStarts,
   optimizerPaths:      simConfig.optimizerPaths,
+  priorMode,
 });
 console.log(`  done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
@@ -146,20 +177,52 @@ function toWeightMap(weightArray) {
   return out;
 }
 
+// Composite ids tag each variant with its methodology config so the 6 variants land
+// on the matching `<base>@<configTag>` entries in portfolios.json (the matrix streams).
 const variantWeights = {
-  'max-sharpe': result.consensusPortfolio?.weights,
-  'min-var':    result.minVariancePortfolio?.weights,
-  'tail-10':    frontierWeights(0.10),
-  'tail-20':    frontierWeights(0.20),
-  'tail-35':    frontierWeights(0.35),
-  'tail-50':    frontierWeights(0.50),
+  [`max-sharpe@${configTag}`]: result.consensusPortfolio?.weights,
+  [`min-var@${configTag}`]:    result.minVariancePortfolio?.weights,
+  [`tail-10@${configTag}`]:    frontierWeights(0.10),
+  [`tail-20@${configTag}`]:    frontierWeights(0.20),
+  [`tail-35@${configTag}`]:    frontierWeights(0.35),
+  [`tail-50@${configTag}`]:    frontierWeights(0.50),
 };
 
-// ── Append to dashboard portfolios.json (append-only) ───────────────────────
-const portfolios  = JSON.parse(readFileSync(PORTFOLIOS, 'utf8'));
+// ── Lean-snapshot ticker set (shared by emit + append validation) ────────────
 const leanTickers = existsSync(LEAN_SNAPSHOT)
   ? new Set((JSON.parse(readFileSync(LEAN_SNAPSHOT, 'utf8')).assets ?? []).map(a => a.ticker))
   : null;
+
+/** Validate one variant's raw weights → weight map (sum≈1, tickers in dashboard snapshot). */
+function validatedWeightMap(id, raw) {
+  if (!raw) throw new Error(`${id} — no optimizer weights`);
+  const weights = toWeightMap(raw);
+  const sum = Object.values(weights).reduce((s, x) => s + x, 0);
+  if (Math.abs(sum - 1) > 0.005) throw new Error(`${id} — weights sum ${sum.toFixed(4)} (must be ≈ 1.00)`);
+  if (leanTickers) {
+    const missing = Object.keys(weights).filter(t => !leanTickers.has(t));
+    if (missing.length) throw new Error(`${id} — tickers not in dashboard snapshot: ${missing.join(', ')}`);
+  }
+  return weights;
+}
+
+// ── --emit mode: write this config's 6 streams to an artifact (parallel cron) ─
+if (emitArg) {
+  const streams = {};
+  let problems = 0;
+  for (const [id, raw] of Object.entries(variantWeights)) {
+    try { streams[id] = validatedWeightMap(id, raw); }
+    catch (e) { console.error(`  FAIL  ${e.message}`); problems++; }
+  }
+  if (problems > 0) { console.error(`\n${problems} stream(s) failed validation — not emitting.`); process.exit(1); }
+  if (dryRun) { console.log(`\n[dry-run] would emit ${Object.keys(streams).length} streams → ${emitArg}`); process.exit(0); }
+  writeFileSync(emitArg, JSON.stringify({ effective, configTag, streams }, null, 2) + '\n');
+  console.log(`\nEmitted ${Object.keys(streams).length} streams (${configTag}, ${effective}) → ${emitArg}`);
+  process.exit(0);
+}
+
+// ── Append to dashboard portfolios.json (append-only) ───────────────────────
+const portfolios  = JSON.parse(readFileSync(PORTFOLIOS, 'utf8'));
 
 console.log('\n─── Appending rebalances ────────────────────────────────────');
 let changed = 0;

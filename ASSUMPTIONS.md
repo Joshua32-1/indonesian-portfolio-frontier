@@ -30,10 +30,11 @@
 
 ## Black-Litterman & IDX calibration
 
-The factor model (`useFactorModel`) is **off by default**; when on, BL blends a cap-weight prior with analyst views. Key calibration, from `factorConfig.js`:
+The factor model (`useFactorModel`) is **off by default** (the optimizer-config default is still legacy PERT); when on, BL blends an equilibrium prior with analyst views. The forward-test matrix turns it on per-run via `optimize.mjs --methodology bl`. Key calibration, from `factorConfig.js`:
 
 - **Structural sell-side optimism:** IDX analyst 12-month targets average **~50 percentage points above** the cap-weight equilibrium π (gap ≈ 1.5× annualized σ). The model is tuned to discount this, not take it at face value.
-- **`tau = 0.03`** (conservative): low τ anchors the posterior toward the cap-weight equilibrium π; higher τ would trust analyst targets more.
+- **`tau = 0.03`** (conservative default): low τ anchors the posterior toward the equilibrium prior π; higher τ would trust analyst targets more. τ is **no longer a fixed constant** for the forward test — `optimize.mjs --tau` overrides it (the matrix sweeps τ ∈ {0.01, 0.03, 0.10}).
+- **Equilibrium prior is selectable** (`applyPriorMode`, default `cap`): `cap` = market-cap equilibrium (identity, unchanged), `equal` = 1/n, `shrunk` = 0.5·cap + 0.5·equal. The matrix sweeps all three (`--prior-mode`).
 - **`omegaScale = 0.05`** is **hardcoded, not a UI slider.** The academic RMSE-implied value (~0.61) would effectively ignore analyst views entirely; 0.05 is the practical BL convention that keeps meaningful per-stock signal. It yields ~48% shrinkage for a heavily-covered large-cap (BBCA, 24 analysts) and ~83% for a thin speculative name.
 - Per-stock differentiation comes from `analystConfidence` (0.7) and `dispersionOmega` (0.8), not from `omegaScale`.
 - `largeCapBias = 0.25` tilts the equilibrium toward larger names.

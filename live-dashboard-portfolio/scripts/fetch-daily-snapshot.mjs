@@ -1,8 +1,11 @@
 /**
  * fetch-daily-snapshot.mjs
  * ─────────────────────────────────────────────────────────────────────────────
- * Fetches daily adjusted-close price history for IDX tickers and IHSG from
- * Yahoo Finance and writes a lean snapshot to data/live-market-snapshot.json.
+ * Fetches daily adjusted-close price history + daily dollar-volume for IDX
+ * tickers and IHSG from Yahoo Finance and writes a lean snapshot to
+ * data/live-market-snapshot.json. dollarVol (raw close × volume, IDR) feeds the
+ * dashboard's forward liquidity-aware net-of-cost model (trailing-63 ADV), the
+ * same field+semantics the backtester's history carries.
  *
  * Run: node scripts/fetch-daily-snapshot.mjs
  *       (or: npm run fetch-snapshot inside live-dashboard-portfolio/)
@@ -75,7 +78,7 @@ function readInception() {
  * @param {string} ticker
  * @param {string} period1 — YYYY-MM-DD
  * @param {string} period2 — YYYY-MM-DD
- * @returns {Promise<{ date: string, adjClose: number }[]>}
+ * @returns {Promise<{ date: string, adjClose: number, dollarVol: number }[]>}
  */
 async function fetchDailyBars(ticker, period1, period2) {
   const result = await yahooFinance.chart(ticker, { period1, period2, interval: '1d' });
@@ -84,20 +87,27 @@ async function fetchDailyBars(ticker, period1, period2) {
 
   return quotes
     .filter(q => q.adjclose != null || q.close != null)
-    .map(q => ({
-      date: new Date(q.date).toISOString().slice(0, 10),
-      adjClose: +(q.adjclose ?? q.close).toFixed(4),
-    }));
+    .map(q => {
+      const rawClose = q.close ?? q.adjclose;          // raw (unadjusted) close for true traded value
+      const volume   = q.volume ?? 0;
+      return {
+        date:      new Date(q.date).toISOString().slice(0, 10),
+        adjClose:  +(q.adjclose ?? q.close).toFixed(4),
+        dollarVol: Math.round((rawClose ?? 0) * volume), // IDR traded value; 0 when volume missing
+      };
+    });
 }
 
 /**
- * Serialises a bars array into { interval, dates, adjClose } for the snapshot.
+ * Serialises a bars array into { interval, dates, adjClose, dollarVol } for the snapshot.
+ * dollarVol is aligned 1:1 with dates/adjClose and used for trailing-ADV net-cost estimation.
  */
 function serializeBars(bars) {
   return {
-    interval: '1d',
-    dates:    bars.map(b => b.date),
-    adjClose: bars.map(b => b.adjClose),
+    interval:  '1d',
+    dates:     bars.map(b => b.date),
+    adjClose:  bars.map(b => b.adjClose),
+    dollarVol: bars.map(b => b.dollarVol),
   };
 }
 

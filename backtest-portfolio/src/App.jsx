@@ -4,6 +4,7 @@ import EquityCurveChart from './components/EquityCurveChart.jsx';
 import MetricsTable from './components/MetricsTable.jsx';
 import WeightsHistoryChart from './components/WeightsHistoryChart.jsx';
 import AttributionTable from './components/AttributionTable.jsx';
+import StrategyBacktest from './components/StrategyBacktest.jsx';
 
 // Names listed on/before this date form the "Long history" preset — recent IPOs bind the
 // walk-forward window to a few weeks, so this preset gives the machinery a meaningful window.
@@ -36,6 +37,10 @@ const GRID_KAPPAS = [0, 0.1, 0.25, 0.5];
 const GRID_PATHS = 40;
 const GRID_ITER = 12;
 const PRIOR_LABEL = { cap: 'Market-cap', shrunk: 'Shrunk', equal: 'Equal' };
+
+// Frozen "Reference backtest" precompute artifacts (npm run backtest), one file per prior.
+// The cap run keeps the canonical filename; shrunk/equal get a -<prior> suffix.
+const REF_FILE = { cap: '/backtest-results.json', shrunk: '/backtest-results-shrunk.json', equal: '/backtest-results-equal.json' };
 
 // Cache key includes the fidelity (paths / iters) so reduced-fidelity grid cells never collide
 // with full-fidelity main-screen runs sharing the same universe/freq/λ/κ/caps/prior.
@@ -88,6 +93,13 @@ export default function App() {
   const [gridResults, setGridResults] = useState(null); // Map cellKey → result | 'computing'
   const [gridProgress, setGridProgress] = useState(null); // { done, total }
   const [gridMeta, setGridMeta] = useState(null);         // { frequency } the grid was generated at
+
+  // Frozen "Reference backtest" precompute (committed JSON), with a per-prior selector.
+  // Distinct from the live explorer above: this is the high-fidelity, seeded, citable artifact —
+  // it updates only on a deliberate `npm run backtest` + commit, and is fixed to the core universe.
+  const [refPrior, setRefPrior] = useState('cap');
+  const refCacheRef = useRef({});            // prior → parsed JSON | null (missing) | 'loading'
+  const [, setRefTick] = useState(0);        // bump to re-render when a lazy fetch lands
 
   const workerRef = useRef(null);
   const jobRef = useRef(0);             // monotonic job id source for ALL jobs (main + grid)
@@ -157,6 +169,17 @@ export default function App() {
       })
       .catch(e => setLoadError(e.message));
   }, [runWith]);
+
+  // Lazy-load the selected prior's frozen reference artifact (cap eagerly on mount). A missing
+  // file (shrunk/equal not yet generated) resolves to null → StrategyBacktest shows its own notice.
+  useEffect(() => {
+    if (refCacheRef.current[refPrior] !== undefined) return; // loaded or in-flight
+    refCacheRef.current[refPrior] = 'loading';
+    fetch(REF_FILE[refPrior])
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then(j => { refCacheRef.current[refPrior] = j; setRefTick(t => t + 1); });
+  }, [refPrior]);
 
   const toggle = t => setIncluded(prev => {
     const next = new Set(prev);
@@ -230,6 +253,10 @@ export default function App() {
 
   const attr = ok ? result.attribution?.[attrStrategy] : null;
   const order = attr ? [...attr.rows].sort((a, b) => b.avgWeight - a.avgWeight).map(r => r.ticker) : [];
+
+  const refCurrent = refCacheRef.current[refPrior]; // undefined | 'loading' | null | parsed JSON
+  const refLoading = refCurrent === undefined || refCurrent === 'loading';
+  const refProv = refCurrent && refCurrent.ok ? { gen: refCurrent.generated, ...refCurrent.params, ...refCurrent.window } : null;
 
   return (
     <Shell>
@@ -447,6 +474,35 @@ export default function App() {
           </>
         )}
       </div>
+
+      {/* Frozen reference backtest: the committed, high-fidelity, seeded precompute. Separate from
+          the live explorer above — this is the citable tearsheet, not a live recompute. */}
+      <div style={{ ...panel, marginTop: 16, borderColor: '#2A2150', background: '#120E26' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <SectionTitle>REFERENCE BACKTEST — frozen precompute (committed, seeded, full κ-sweep)</SectionTitle>
+          <Toggle label="Prior" value={refPrior} setValue={setRefPrior} options={PRIORS} />
+        </div>
+        <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 4, lineHeight: 1.6 }}>
+          The auditable tearsheet generated offline by <code style={refCode}>npm run backtest</code> over the fixed
+          long-history core universe — <b>byte-reproducible</b> (fixed RNG seed) and higher-fidelity than the live
+          explorer above. It does <b>not</b> react to the universe toggle and updates only when the precompute is
+          deliberately re-run and committed. Use the explorer above for live "what-if" exploration; cite this.
+        </div>
+        {refProv && (
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline', marginTop: 10 }}>
+            <Stat label="GENERATED" value={(refProv.gen || '').slice(0, 10) || '—'} />
+            <Stat label="SEED" value={refProv.seed != null ? String(refProv.seed) : '—'} sub="fixed ⇒ reproducible" />
+            <Stat label="PATHS" value={refProv.paths != null ? String(refProv.paths) : '—'} sub="MC tail scenarios" />
+            <Stat label="PRIOR" value={PRIOR_LABEL[refProv.priorMode] || refProv.priorMode || '—'} />
+            <Stat label="UNIVERSE" value={refProv.nTickers != null ? `${refProv.nTickers} names` : '—'} sub={refProv.start ? `${refProv.start} → ${refProv.end}` : undefined} />
+          </div>
+        )}
+        <div style={{ marginTop: 12 }}>
+          {refLoading
+            ? <div style={{ fontSize: 12, color: '#5B7A95' }}>Loading reference backtest…</div>
+            : <StrategyBacktest results={refCurrent} />}
+        </div>
+      </div>
     </Shell>
   );
 }
@@ -495,6 +551,7 @@ const SectionTitle = ({ children }) => (
 );
 
 const panel = { background: '#0E1F35', border: '1px solid #16304D', borderRadius: 10, padding: 14 };
+const refCode = { background: '#0A1628', border: '1px solid #2A2150', borderRadius: 4, padding: '1px 5px', margin: '0 2px', fontSize: 10, fontFamily: 'monospace' };
 const selBtn = { border: '1px solid #1E3A5F', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: '3px 10px', marginLeft: 4 };
 const miniBtn = { flex: 1, border: '1px solid #1E3A5F', borderRadius: 5, background: 'transparent', color: '#7DA8C7', fontSize: 10, fontWeight: 700, cursor: 'pointer', padding: '4px 2px' };
 const runBtn = { border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 800, padding: '6px 16px', marginLeft: 'auto' };

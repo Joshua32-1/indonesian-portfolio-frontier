@@ -47,6 +47,7 @@ function main() {
   // via env for a faster pass, e.g.:
   //   FREQS=monthly,quarterly PATHS=70 MAXITER=25 npm run backtest
   //   LAMBDAS=0,0.5 KAPPA=0.25 npm run backtest
+  //   SEED=12345 PRIOR=shrunk npm run backtest   (fixed seed ⇒ reproducible; per-prior file)
   const num = (env, d) => (process.env[env] ? Number(process.env[env]) : d);
   const list = (env, d) => (process.env[env] ? process.env[env].split(',').map(Number) : d);
   const frequencies = process.env.FREQS ? process.env.FREQS.split(',') : ['weekly', 'monthly', 'quarterly'];
@@ -55,6 +56,11 @@ function main() {
     ? [{ key: 'MaxSharpe', label: 'Max-Sharpe', mode: 'avgMuSharpe', tailPenalty: 0 },
        ...lambdas.map(l => ({ key: `Tail${String(l).replace('.', '')}`, label: `Tail λ=${l}`, mode: 'tailAware', tailPenalty: l }))]
     : undefined; // → engine default (Max-Sharpe + λ 0.25/0.5/1.0)
+  const seed = process.env.SEED != null ? Number(process.env.SEED) : 12345; // fixed ⇒ reproducible
+  const priorMode = process.env.PRIOR || 'cap';                              // 'cap' | 'shrunk' | 'equal'
+  const paths = num('PATHS', 100);
+
+  console.log(`    seed=${seed} | paths=${paths} | prior=${priorMode} | freqs=${frequencies.join(',')}\n`);
 
   const t0 = Date.now();
   const result = runStrategyBacktest(data, universe, {
@@ -62,9 +68,11 @@ function main() {
     kappa: num('KAPPA', 0.25),
     kappaSweep: list('KAPPAS', [0, 0.05, 0.1, 0.25, 0.5]),
     frequencies,
-    paths: num('PATHS', 100),
+    paths,
     tailPenalty: num('TAILPEN', 0.5),
     optimizeMaxIter: num('MAXITER', 35),
+    seed,
+    priorMode,
   });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
@@ -74,7 +82,7 @@ function main() {
   }
 
   for (const w of result.warnings) console.log(`  ⚠️  ${w}`);
-  console.log(`\n  cost model: ${result.params.costModel} | cap weights: ${result.params.capMode} | fixed κ=${result.params.kappa}`);
+  console.log(`\n  cost model: ${result.params.costModel} | prior: ${result.params.priorMode} (capMode ${result.params.capMode}) | seed: ${result.params.seed} | fixed κ=${result.params.kappa}`);
   console.log(`  window: ${result.window.start} → ${result.window.end} | variants: ${result.params.variants.map(v => v.label).join(', ')}`);
   const fmt = m => `S(net)=${m.sharpe.toFixed(2)} S(gr)=${m.grossSharpe.toFixed(2)} IR=${(m.infoRatio ?? 0).toFixed(2)} t=${(m.tStat ?? 0).toFixed(1)} MDD=${(m.maxDrawdown * 100).toFixed(0)}% turn=${m.annualTurnover.toFixed(1)}× drag=${(m.annualCostDrag * 100).toFixed(2)}%`;
   for (const [fk, fb] of Object.entries(result.byFrequency)) {
@@ -86,7 +94,11 @@ function main() {
   }
 
   const payload = { generated: new Date().toISOString(), universe, ...result };
-  const outPath = join(publicDir, 'backtest-results.json');
+  // Per-prior filename so cap/shrunk/equal runs don't clobber each other. The cap run keeps
+  // the canonical name the UI loads by default; others get a -<prior> suffix. OUTFILE overrides
+  // it — used by the sharded generate-reference-artifacts.mjs orchestrator for per-(prior,freq) shards.
+  const outName = process.env.OUTFILE || (priorMode === 'cap' ? 'backtest-results.json' : `backtest-results-${priorMode}.json`);
+  const outPath = join(publicDir, outName);
   writeFileSync(outPath, JSON.stringify(payload));
   console.log(`\n📦  Written → ${outPath}  (${secs}s)\n`);
 }

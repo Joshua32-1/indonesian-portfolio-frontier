@@ -64,6 +64,27 @@ export function computeEquilibriumReturns(covMatrix, capWeights, { riskFreeRate 
 }
 
 /**
+ * Equilibrium-prior reference weights under one of three modes. The ONLY thing that
+ * varies the BL prior — everything downstream (π via δΣw, Ω, posterior) is unchanged.
+ * Mirrors the backtester's buildStepContexts prior definitions exactly:
+ *   'cap'    → the supplied cap-weight vector, returned UNCHANGED (byte-identical path)
+ *   'equal'  → 1/n
+ *   'shrunk' → 0.5·cap + 0.5·equal   (convex blend; still sums to 1 when cap does)
+ *
+ * @param {number[]} capWeights — the optimizer's cap-weight prior (sums to 1)
+ * @param {'cap'|'shrunk'|'equal'} priorMode
+ * @returns {number[]}
+ */
+export function applyPriorMode(capWeights, priorMode = 'cap') {
+  if (priorMode === 'cap' || !priorMode) return capWeights; // unchanged ⇒ provably identical
+  const n = capWeights.length;
+  const eq = 1 / n;
+  if (priorMode === 'equal') return Array(n).fill(eq);
+  if (priorMode === 'shrunk') return capWeights.map(w => 0.5 * w + 0.5 * eq);
+  throw new Error(`Unknown priorMode: ${priorMode}`);
+}
+
+/**
  * View uncertainty diagonal Ω — decoupled from τ so the τ slider actually moves μ_BL.
  *
  * ω_i = omegaScale · Σ_ii · (1 + dispersionOmega · dispersion_i)² · (maxAnalysts / analysts_i)^analystConfidence

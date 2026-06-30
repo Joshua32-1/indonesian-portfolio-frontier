@@ -36,10 +36,14 @@ npm run dev              # Vite dev server (port 5174) — live explorer + preco
 ```bash
 npm run dev              # Vite dev server
 npm run build            # vite build → dist/
-npm run fetch-snapshot   # node scripts/fetch-daily-snapshot.mjs — lean daily snapshot (CI runs this)
+npm run fetch-snapshot   # node scripts/fetch-daily-snapshot.mjs — lean daily snapshot (incl. dollarVol; CI runs this)
+node scripts/init-portfolios-matrix.mjs   # (re)init the EMPTY 60-stream matrix skeleton (refuses if seeded)
+node scripts/merge-rebalances.mjs <emit…> # assemble per-config emit artifacts → portfolios.json (cron merge step)
 ```
 
-**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (automated rebalance via `portfolio-app/scripts/optimize.mjs`).
+**Forward-test matrix (optimizer side):** `portfolio-app/scripts/optimize.mjs` is BL-capable per run via flags — `--methodology pert|bl`, `--prior-mode cap|shrunk|equal`, `--tau <n>`, `--emit <file>` — and tags emitted stream ids `<base>@<configTag>`. The config **default is still legacy PERT** (`optimizer-config.json → factorConfig.useFactorModel:false`). Seed the full 10-config matrix locally with `portfolio-app/scripts/seed-forward-matrix.mjs` (sequential, resumable). See [FORWARD-TEST.md](FORWARD-TEST.md).
+
+**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** — `optimize.mjs --emit` per headline config → `merge-rebalances.mjs` → one PR).
 
 ## Golden rules
 
@@ -66,6 +70,7 @@ npm run fetch-snapshot   # node scripts/fetch-daily-snapshot.mjs — lean daily 
 | Modeling assumptions & limitations | [ASSUMPTIONS.md](ASSUMPTIONS.md) |
 | Monorepo structure, data flow, deployment, CI | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Quant + IDX terminology | [GLOSSARY.md](GLOSSARY.md) |
+| Forward-test protocol (methodology matrix, rebalance cron) | [FORWARD-TEST.md](FORWARD-TEST.md) |
 | Dev setup & contribution rules | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | **Deep math walkthrough (authoritative)** | [portfolio-app/README.md](portfolio-app/README.md) |
 | **Prescriptive tuning (what values to set)** | [portfolio-app/CALIBRATION.md](portfolio-app/CALIBRATION.md) |

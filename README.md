@@ -38,6 +38,7 @@ Weights reach the dashboard's `portfolios.json` either **by hand** (copy from th
 | [API.md](API.md) | Data contracts (snapshot schema, `portfolios.json`) and the `src/math/` public API. |
 | [ASSUMPTIONS.md](ASSUMPTIONS.md) | Modeling assumptions and limitations baked into every result. |
 | [GLOSSARY.md](GLOSSARY.md) | Quant + IDX terminology. |
+| [FORWARD-TEST.md](FORWARD-TEST.md) | Out-of-sample protocol — the methodology matrix, rebalance cron, hypotheses. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev setup, math-purity rules, validation, rebalance procedure. |
 | [portfolio-app/README.md](portfolio-app/README.md) | Deep math walkthrough (authoritative). |
 | [portfolio-app/CALIBRATION.md](portfolio-app/CALIBRATION.md) | Prescriptive tuning — what values to set for a given universe. |

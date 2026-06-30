@@ -32,6 +32,7 @@ import {
   buildBlackLittermanContext,
   computePosteriorReturns,
   shouldUseBlackLitterman,
+  applyPriorMode,
 } from './blackLitterman.js';
 import {
   buildObjectiveFn,
@@ -127,8 +128,8 @@ function hasBindingPositionCaps(maxPositionCap, positionCaps) {
 
 // ── Dirichlet Weight Generation  ───────────────────────────────────────────────
 
-function dirichletWeights(n) {
-  const raw = Array.from({ length: n }, () => -Math.log(Math.random() + 1e-15));
+function dirichletWeights(n, rng = Math.random) {
+  const raw = Array.from({ length: n }, () => -Math.log(rng() + 1e-15));
   const sum = raw.reduce((s, v) => s + v, 0);
   return raw.map(v => v / sum);
 }
@@ -229,11 +230,11 @@ function averageScenarioMeans(scenarios) {
  * Hill-climbing optimiser on the capped simplex.
  * Transfers weight between asset pairs; re-enforces caps after each move.
  */
-function optimizePortfolio(objective, assets, constraintOpts, startWeights, { maxIter = 120, step = 0.008, randomRestarts = 32, extraStarts = [] } = {}) {
+function optimizePortfolio(objective, assets, constraintOpts, startWeights, { maxIter = 120, step = 0.008, randomRestarts = 32, extraStarts = [], rng = Math.random } = {}) {
   const n = assets.length;
   const starts = [startWeights, ...extraStarts];
   for (let r = 0; r < randomRestarts; r++) {
-    starts.push(dirichletWeights(n));
+    starts.push(dirichletWeights(n, rng));
   }
 
   let bestW = enforcePortfolioConstraints(Array(n).fill(1 / n), assets, constraintOpts);
@@ -311,6 +312,7 @@ function findRobustPortfolio(scenarios, covMatrix, assets, opts) {
     deterministicStarts = false,
     optimizeMaxIter = 100,
     optimizeStep = 0.01,
+    rng = Math.random,
   } = opts;
 
   const constraintOpts = buildConstraintOpts(sectorCaps, maxPositionCap, positionCaps);
@@ -326,7 +328,7 @@ function findRobustPortfolio(scenarios, covMatrix, assets, opts) {
   const sigmaRef = Math.sqrt(portfolioVariance(eqW, covMatrix));
 
   const choleskyL = sharedCholesky ?? choleskyDecompose(covMatrix);
-  const realizationShocks = sharedShocks ?? drawCorrelatedShocks(choleskyL, subsampleScenarios.length);
+  const realizationShocks = sharedShocks ?? drawCorrelatedShocks(choleskyL, subsampleScenarios.length, rng);
 
   const objective = buildObjectiveFn({
     mode: robustMode,
@@ -352,7 +354,7 @@ function findRobustPortfolio(scenarios, covMatrix, assets, opts) {
 
   const { weights, score } = optimizePortfolio(objective, assets, constraintOpts, seed, {
     maxIter: optimizeMaxIter, step: optimizeStep, randomRestarts: restarts,
-    extraStarts,
+    extraStarts, rng,
   });
 
   // Report avgMeans across the full set for display purposes
@@ -378,7 +380,8 @@ function findRobustPortfolio(scenarios, covMatrix, assets, opts) {
  * @param {Asset[]}    assets
  * @param {object}     opts  { sectorCaps, maxPositionCap, positionCaps, riskFreeRate,
  *                             robustMode, tailPenalty, currentWeights, turnoverPenalty,
- *                             deterministicStarts, randomRestarts }
+ *                             deterministicStarts, randomRestarts,
+ *                             rng = Math.random (pass makeRng(seed) for reproducible draws) }
  * @returns {{ weights:number[], avgMeans:number[], portfolioSharpe:number }}
  */
 export function optimizeTailAware(scenarios, covMatrix, assets, opts) {
@@ -915,6 +918,7 @@ export function buildScenarioBank({
   riskFreeRate     = 0.0575,
   maxPositionCap   = 1,
   userPositionCaps = {},
+  priorMode        = 'cap',   // BL equilibrium prior: 'cap' (default, unchanged) | 'shrunk' | 'equal'
 }) {
   const cfg = normalizeFactorConfig(factorConfig ?? {});
   const factorActive = isFactorModelActive(cfg);
@@ -935,7 +939,7 @@ export function buildScenarioBank({
       blContext = buildBlackLittermanContext({
         assets,
         covMatrix: simCov,
-        capWeights: factors.capWeights,
+        capWeights: applyPriorMode(factors.capWeights, priorMode),
         factorConfig: cfg,
         maxAnalysts: factors.maxAnalysts,
         riskFreeRate,
@@ -991,6 +995,7 @@ export function runMonteCarloSimulation({
   prebuiltBank        = null,
   deterministicStarts = false,
   optimizerPaths      = ROBUST_SUBSAMPLE_SIZE,
+  priorMode           = 'cap',   // BL equilibrium prior (forwarded to buildScenarioBank)
 }) {
   const n = assets.length;
   const empty = {
@@ -1011,7 +1016,7 @@ export function runMonteCarloSimulation({
   // shocks are reused exactly — optimizer sees the same objective surface every click.
   const bank = prebuiltBank ?? buildScenarioBank({
     assets, covMatrix, factorConfig, iterations, optimizerPaths,
-    riskFreeRate, maxPositionCap, userPositionCaps,
+    riskFreeRate, maxPositionCap, userPositionCaps, priorMode,
   });
   const {
     scenarios, simCov, blContext, choleskyL,
