@@ -11,6 +11,7 @@
  */
 
 import { alignPriceSeries } from './priceAlign.js';
+import { rebalanceCostByTicker, applyFrequencyToRebalances, trailingADV } from './transactionCosts.js';
 
 /**
  * Returns the weight set active on or before a given ISO date.
@@ -48,24 +49,34 @@ function decimalLogReturns(prices) {
 /**
  * Builds a stitched indexed series (base 100 at first daily bar >= inception) for one portfolio.
  *
- * @param {{
- *   id: string,
- *   rebalances: { effective: string, weights: Record<string,number> }[]
- * }} portfolio
- * @param {Array<{ ticker: string, priceHistory: { dates: string[], adjClose: number[] } }>} assets
- * @param {{ dates: string[], adjClose: number[] }} benchmarkHistory - IHSG
+ * Frequency overlay (`opts.frequency`): the stored rebalances are weekly; monthly/
+ * quarterly apply only the first rebalance in each month/quarter and hold it
+ * (see applyFrequencyToRebalances). Between updates the held target is daily-
+ * rebalanced-to-target (the original gross convention).
+ *
+ * Net-of-cost (`opts.net`): charges IDX turnover cost the day a new target takes
+ * effect (plus the one-time inception deployment from cash, on the first return
+ * bar — matching the backtester's period-0 convention). Cost uses the trailing-63
+ * ADV from the snapshot's dollarVol[]; absent → flat per-side. Gross + weekly
+ * (the defaults) reproduce the original series byte-for-byte.
+ *
+ * @param {{ id: string, rebalances: { effective: string, weights: Record<string,number> }[] }} portfolio
+ * @param {Array<{ ticker: string, priceHistory: { dates: string[], adjClose: number[], dollarVol?: number[] } }>} assets
+ * @param {{ dates: string[], adjClose: number[] }} benchmarkHistory - IHSG (built separately)
  * @param {string} inception - ISO date; series starts from first daily bar >= inception
- * @returns {{ date: string, value: number }[]} — indexed to 100 at inception
+ * @param {{ frequency?: 'weekly'|'monthly'|'quarterly', net?: boolean }} [opts]
+ * @returns {{ date: string, value: number, rp: number }[]} — indexed to 100 at inception
  */
-export function buildTrackerSeries(portfolio, assets, benchmarkHistory, inception) {
-  const rebalances = [...(portfolio.rebalances ?? [])].sort((a, b) =>
+export function buildTrackerSeries(portfolio, assets, benchmarkHistory, inception, opts = {}) {
+  const { frequency = 'weekly', net = false } = opts;
+
+  const sorted = [...(portfolio.rebalances ?? [])].sort((a, b) =>
     a.effective < b.effective ? -1 : 1,
   );
+  const rebalances = applyFrequencyToRebalances(sorted, frequency);
 
-  // Collect all tickers referenced across all rebalances
-  const usedTickers = new Set(
-    rebalances.flatMap(r => Object.keys(r.weights ?? {})),
-  );
+  // Collect all tickers referenced across the (frequency-filtered) rebalances
+  const usedTickers = new Set(rebalances.flatMap(r => Object.keys(r.weights ?? {})));
   const relevantAssets = assets.filter(a => usedTickers.has(a.ticker));
   if (!relevantAssets.length) return [];
 
@@ -74,31 +85,45 @@ export function buildTrackerSeries(portfolio, assets, benchmarkHistory, inceptio
   const aligned = alignPriceSeries(series).filter(row => row.date >= inception);
   if (aligned.length < 2) return [];
 
-  // Build per-row portfolio return and compound into an index
+  // ADV per ticker as of a date, for the net cost model (computed lazily, net only).
+  const advAt = (date) =>
+    Object.fromEntries(relevantAssets.map(a => [a.ticker, trailingADV(a.priceHistory, date)]));
+
   const result = [];
   let idx = 100;
+  let prevActive = null; // weightsAtDate returns a stable reference per period ⇒ ref-inequality = new rebalance
 
   for (let t = 0; t < aligned.length; t++) {
     const row = aligned[t];
-    if (t === 0) {
-      result.push({ date: row.date, value: 100, rp: 0 });
-      continue;
-    }
-    const prevRow = aligned[t - 1];
     const w = weightsAtDate(rebalances, row.date);
 
+    if (t === 0) {
+      result.push({ date: row.date, value: 100, rp: 0 });
+      prevActive = w;
+      continue;
+    }
+
+    const prevRow = aligned[t - 1];
     let rp = 0;
     for (const a of relevantAssets) {
       const px0 = prevRow[a.ticker];
       const px1 = row[a.ticker];
-      if (px0 > 0 && px1 != null) {
-        const wi = w[a.ticker] ?? 0;
-        rp += wi * Math.log(px1 / px0);
-      }
+      if (px0 > 0 && px1 != null) rp += (w[a.ticker] ?? 0) * Math.log(px1 / px0);
     }
 
-    idx *= Math.exp(rp);
-    result.push({ date: row.date, value: +idx.toFixed(4), rp });
+    // Net: turnover cost on deployment (first return bar) + whenever a new target takes effect.
+    let costMult = 1;
+    if (net) {
+      let cost = 0;
+      const adv = advAt(row.date);
+      if (t === 1) cost += rebalanceCostByTicker(prevActive, {}, adv);   // cash → first target
+      if (w !== prevActive) cost += rebalanceCostByTicker(w, prevActive, adv);
+      costMult = 1 - cost;
+    }
+
+    idx *= Math.exp(rp) * costMult;
+    result.push({ date: row.date, value: +idx.toFixed(4), rp: rp + Math.log(costMult) });
+    prevActive = w;
   }
 
   return result;

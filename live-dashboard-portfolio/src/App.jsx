@@ -1,6 +1,10 @@
 /**
  * App.jsx — IDX Portfolio Tracker
- * Minimal read-only dashboard: indexed performance chart + weight matrix.
+ * Read-only forward tracker: indexed performance + metrics across the full
+ * comparison matrix — 6 strategy variants × 3 Black-Litterman priors × 3
+ * rebalance frequencies × gross/net of IDX costs. Prior/frequency/cost are
+ * selectors; the chart+table show the selected slice (6 variants + IHSG), so
+ * every combination is explorable and directly comparable to the backtest.
  * Data sources: /live-market-snapshot.json + /portfolios.json (both static).
  */
 
@@ -27,7 +31,7 @@ import { buildLiveAttribution } from './math/attribution.js';
 import WeightsHistoryChart from './components/WeightsHistoryChart.jsx';
 import AttributionTable    from './components/AttributionTable.jsx';
 
-// ── Palette ───────────────────────────────────────────────────────────────────
+// ── Palette (keyed by strategy BASE id; priors share a base colour) ─────────────
 
 const COLORS = {
   IHSG:       '#94A3B8',
@@ -38,6 +42,30 @@ const COLORS = {
   'tail-35':    '#A78BFA',
   'tail-50':    '#34D399',
 };
+
+// Matrix axes
+const PRIORS = [
+  { id: 'cap',    label: 'Market-cap' },
+  { id: 'shrunk', label: 'Shrunk' },
+  { id: 'equal',  label: 'Equal-weight' },
+];
+const FREQS = [
+  { id: 'weekly',    label: 'Weekly' },
+  { id: 'monthly',   label: 'Monthly' },
+  { id: 'quarterly', label: 'Quarterly' },
+];
+const METHODS = [
+  { id: 'bl',   label: 'Black-Litterman' },
+  { id: 'pert', label: 'Legacy PERT' },
+];
+const TAUS = [
+  { id: 0.01, label: 'τ=0.01' },
+  { id: 0.03, label: 'τ=0.03' },
+  { id: 0.1,  label: 'τ=0.10' },
+];
+
+/** Strategy base id from a portfolio entry (explicit `base`, else strip `@prior`). */
+const baseOf = (p) => p.base ?? String(p.id).split('@')[0];
 
 const BG       = '#05080F';
 const PANEL    = '#07111E';
@@ -86,30 +114,28 @@ const s = {
     marginBottom: 12,
     textTransform: 'uppercase',
   },
-  kpiRow: {
+  controlsRow: {
     display: 'flex',
     flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 0,
+    gap: 16,
+    alignItems: 'center',
   },
-  kpiCard: (color, active) => ({
-    background: active ? `${color}10` : '#040A13',
-    border: `1px solid ${active ? color + '55' : BORDER}`,
-    borderRadius: 6,
-    padding: '10px 14px',
-    minWidth: 130,
-    flex: '1 1 130px',
-    cursor: 'default',
+  selectLabel: {
+    fontSize: 9, color: TEXT_DIM, letterSpacing: 1,
+    display: 'flex', alignItems: 'center', gap: 6, textTransform: 'uppercase',
+  },
+  select: {
+    background: '#0A1628', color: TEXT_MED, border: `1px solid ${BORDER}`,
+    borderRadius: 4, padding: '3px 8px', fontSize: 10, fontFamily: 'monospace', cursor: 'pointer',
+  },
+  segBtn: (on) => ({
+    background: on ? '#0EA5E912' : '#040A13',
+    color: on ? '#38BDF8' : TEXT_DIM,
+    border: `1px solid ${on ? '#0EA5E988' : BORDER}`,
+    borderRadius: 4, padding: '3px 12px', fontSize: 10, fontWeight: on ? 700 : 400,
+    cursor: 'pointer', letterSpacing: 0.5,
   }),
-  kpiLabel: (color) => ({ fontSize: 9, color, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }),
-  kpiValue: { fontSize: 18, fontWeight: 700, color: TEXT_HI, lineHeight: 1 },
-  kpiSub: { fontSize: 9, color: TEXT_DIM, marginTop: 4 },
-  legendRow: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 12,
-  },
+  legendRow: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 },
   chip: (color, on) => ({
     display: 'flex',
     alignItems: 'center',
@@ -182,11 +208,6 @@ function fmtPct(decimal, sign = true) {
   return `${sign && pct > 0 ? '+' : ''}${pct.toFixed(1)}%`;
 }
 
-function fmtDate(iso) {
-  if (!iso) return '—';
-  return iso.slice(0, 7); // YYYY-MM
-}
-
 function fmtTs(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
@@ -228,9 +249,17 @@ export default function App() {
   const [snapshot, setSnapshot]     = useState(null);
   const [portfoliosData, setPortfoliosData] = useState(null);
   const [error, setError]           = useState(null);
-  const [visible, setVisible]       = useState(null); // set after data loads
+  const [visible, setVisible]       = useState(null); // set after data loads (toggled-off lines)
   const [weightDate, setWeightDate] = useState(null); // null → resolves to latest rebalance date
-  const [attrPortfolio, setAttrPortfolio] = useState(null); // null → first strategy
+  const [attrPortfolio, setAttrPortfolio] = useState(null); // null → first strategy in slice
+
+  // Matrix selectors
+  const [methodology, setMethodology] = useState('bl'); // 'bl' | 'pert'
+  const [prior, setPrior]         = useState('cap');
+  const [tau, setTau]             = useState(0.03);
+  const [frequency, setFrequency] = useState('weekly');
+  const [costBasis, setCostBasis] = useState('gross'); // 'gross' | 'net'
+  const net = costBasis === 'net';
 
   // Load both JSON files
   useEffect(() => {
@@ -247,46 +276,51 @@ export default function App() {
       .then(([snap, ports]) => {
         setSnapshot(snap);
         setPortfoliosData(ports);
-        // Default: all visible
-        const ids = new Set(['IHSG', ...ports.portfolios.map(p => p.id)]);
-        setVisible(ids);
+        // Default: all lines visible (IHSG + every composite id)
+        setVisible(new Set(['IHSG', ...ports.portfolios.map(p => p.id)]));
       })
       .catch(err => setError(err.message));
   }, []);
 
-  // Build chart data and forward-test metrics
+  // Build chart data + metrics for the SELECTED SLICE (prior) at the selected frequency / cost basis
   const { chartRows, metrics, portfolios, allTickers, rebalanceDates } = useMemo(() => {
     if (!snapshot || !portfoliosData) return {};
 
     const assets       = snapshot.assets ?? [];
     const benchmark    = snapshot.benchmark?.priceHistory ?? null;
     const inception    = portfoliosData.inception;
-    const portfolios   = portfoliosData.portfolios ?? [];
+    const all          = portfoliosData.portfolios ?? [];
     const riskFreeRate = portfoliosData.riskFreeRate ?? 0.0575;
 
-    // IHSG series
+    // Slice = the 6 variants for the selected methodology config. PERT ignores prior/τ;
+    // BL slices by (prior, τ). Falls back to "all" for a flat legacy schema (no methodology field).
+    const hasMatrix = all.some(p => p.methodology != null);
+    const portfolios = !hasMatrix ? all
+      : methodology === 'pert'
+        ? all.filter(p => p.methodology === 'pert')
+        : all.filter(p => p.methodology === 'bl' && p.prior === prior && p.tau === tau);
+
+    const opts = { frequency, net };
+
+    // IHSG series (cost/frequency agnostic)
     const ihsgSeries = buildIHSGSeries(benchmark, inception);
 
-    // Portfolio series
+    // Portfolio series for the slice
     const portSeriesMap = {};
     for (const port of portfolios) {
-      portSeriesMap[port.id] = buildTrackerSeries(port, assets, benchmark, inception);
+      portSeriesMap[port.id] = buildTrackerSeries(port, assets, benchmark, inception, opts);
     }
 
-    // Merge into Recharts rows
     const allSeries = [
       { id: 'IHSG', series: ihsgSeries },
       ...portfolios.map(p => ({ id: p.id, series: portSeriesMap[p.id] ?? [] })),
     ];
     const chartRows = mergeChartRows(allSeries);
 
-    // Date-keyed IHSG returns for tracking error alignment
     const ihsgRetByDate = new Map();
     for (const row of ihsgSeries) {
       if (row.rp !== undefined) ihsgRetByDate.set(row.date, row.rp);
     }
-
-    // Returns aligned by date (portfolio series and IHSG may have different date sets)
     function alignedPortBench(portSeries) {
       const portRets = [], benchRets = [];
       for (const row of portSeries.slice(1)) {
@@ -296,7 +330,6 @@ export default function App() {
       return { portRets, benchRets };
     }
 
-    // Compute metrics for IHSG baseline
     const ihsgDailyRets = extractDailyReturns(ihsgSeries);
     const ihsgAnnRet    = calcAnnualizedReturn(ihsgSeries);
     const ihsgAnnVol    = calcAnnualizedVol(ihsgDailyRets);
@@ -313,7 +346,6 @@ export default function App() {
       },
     };
 
-    // Compute metrics for each portfolio
     for (const port of portfolios) {
       const series    = portSeriesMap[port.id] ?? [];
       const dailyRets = extractDailyReturns(series);
@@ -333,18 +365,16 @@ export default function App() {
       };
     }
 
-    // Weight table: union of all tickers across every rebalance (stable across dates)
     const allTickers = [...new Set(
       portfolios.flatMap(p => (p.rebalances ?? []).flatMap(r => Object.keys(r.weights ?? {})))
     )].sort();
 
-    // All rebalance dates across every strategy, newest first (drives the date selector)
     const rebalanceDates = [...new Set(
       portfolios.flatMap(p => (p.rebalances ?? []).map(r => r.effective))
     )].sort((a, b) => (a < b ? 1 : -1));
 
     return { chartRows, metrics, portfolios, allTickers, rebalanceDates };
-  }, [snapshot, portfoliosData]);
+  }, [snapshot, portfoliosData, methodology, prior, tau, frequency, net]);
 
   // Date-aware weight rows: weights active on the selected rebalance date (default latest)
   const activeWeightDate = weightDate ?? rebalanceDates?.[0] ?? null;
@@ -360,8 +390,10 @@ export default function App() {
     });
   }, [portfolios, allTickers, activeWeightDate]);
 
-  // Attribution: per-asset return + risk contribution for the selected strategy
-  const activeAttrId = attrPortfolio ?? portfolios?.[0]?.id ?? null;
+  // Attribution: per-asset contribution for the selected strategy (within the slice)
+  const activeAttrId = (attrPortfolio && portfolios?.some(p => p.id === attrPortfolio))
+    ? attrPortfolio
+    : portfolios?.[0]?.id ?? null;
   const attribution = useMemo(() => {
     if (!portfolios?.length || !snapshot?.assets || !activeAttrId || !portfoliosData?.inception) return null;
     const p = portfolios.find(p => p.id === activeAttrId) ?? portfolios[0];
@@ -371,7 +403,6 @@ export default function App() {
   function toggleLine(id) {
     setVisible(prev => {
       const next = new Set(prev);
-      // Never allow removing IHSG as the only reference — but allow toggling
       if (next.has(id)) {
         if (next.size > 1) next.delete(id);
       } else {
@@ -411,9 +442,12 @@ export default function App() {
 
   const inception = portfoliosData.inception;
   const snapshotEnd = snapshot.historyRange?.end ?? '—';
-  const latestRebalance = portfolios
-    ? Math.max(...portfolios.map(p => latestRebalanceDate(p.rebalances) ?? ''))
+  const latestRebalance = portfolios?.length
+    ? portfolios.map(p => latestRebalanceDate(p.rebalances) ?? '').sort().at(-1) || '—'
     : '—';
+  const priorLabel = PRIORS.find(x => x.id === prior)?.label ?? prior;
+  const freqLabel  = FREQS.find(x => x.id === frequency)?.label ?? frequency;
+  const configLabel = methodology === 'pert' ? 'Legacy PERT' : `BL · ${priorLabel} · τ=${tau.toFixed(2)}`;
 
   return (
     <div style={s.root}>
@@ -423,7 +457,8 @@ export default function App() {
         <div>
           <div style={s.title}>IDX PORTFOLIO TRACKER</div>
           <div style={s.subtitle}>
-            Indexed to 100 at inception · daily adjusted close · Jakarta Composite (IHSG) benchmark
+            Indexed to 100 at inception · daily adjusted close · Jakarta Composite (IHSG) benchmark ·
+            comparison matrix: 6 variants × prior × frequency × gross/net
           </div>
         </div>
         <div style={s.metaRight}>
@@ -434,9 +469,56 @@ export default function App() {
         </div>
       </div>
 
+      {/* ── Matrix controls ─────────────────────────────────────────────── */}
+      <div style={{ ...s.panel, marginBottom: 16 }}>
+        <div style={s.controlsRow}>
+          <label style={s.selectLabel}>
+            Methodology
+            <select style={s.select} value={methodology} onChange={e => setMethodology(e.target.value)}>
+              {METHODS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select>
+          </label>
+          {methodology === 'bl' && (
+            <label style={s.selectLabel}>
+              Prior
+              <select style={s.select} value={prior} onChange={e => setPrior(e.target.value)}>
+                {PRIORS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </label>
+          )}
+          {methodology === 'bl' && (
+            <label style={s.selectLabel}>
+              Tau
+              <select style={s.select} value={tau} onChange={e => setTau(Number(e.target.value))}>
+                {TAUS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+            </label>
+          )}
+          <label style={s.selectLabel}>
+            Frequency
+            <select style={s.select} value={frequency} onChange={e => setFrequency(e.target.value)}>
+              {FREQS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+            </select>
+          </label>
+          <span style={s.selectLabel}>
+            Cost
+            <span style={{ display: 'inline-flex', gap: 4 }}>
+              <button style={s.segBtn(!net)} onClick={() => setCostBasis('gross')}>Gross</button>
+              <button style={s.segBtn(net)}  onClick={() => setCostBasis('net')}>Net</button>
+            </span>
+          </span>
+          <span style={{ marginLeft: 'auto', fontSize: 9, color: TEXT_DIM, maxWidth: 360, lineHeight: 1.5 }}>
+            Forward evidence accrues slowly — early weeks are dominated by noise; read the 15-year
+            backtest tearsheet for discrimination, this for out-of-sample confirmation.
+          </span>
+        </div>
+      </div>
+
       {/* ── Performance metrics table ────────────────────────────────── */}
       <div style={s.panel}>
-        <div style={s.sectionLabel}>Performance Metrics · Since Inception</div>
+        <div style={s.sectionLabel}>
+          Performance Metrics · Since Inception · {configLabel} · {freqLabel} · {net ? 'net of cost' : 'gross'}
+        </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={s.table}>
             <thead>
@@ -475,10 +557,10 @@ export default function App() {
                 );
               })()}
 
-              {/* Portfolio rows */}
+              {/* Portfolio rows (selected slice) */}
               {(portfolios ?? []).map(p => {
                 const m   = metrics?.[p.id];
-                const col = COLORS[p.id] ?? '#64748B';
+                const col = COLORS[baseOf(p)] ?? '#64748B';
                 return (
                   <tr key={p.id}>
                     <td style={s.tdLeft}>
@@ -502,6 +584,7 @@ export default function App() {
         </div>
         <div style={{ marginTop: 8, fontSize: 9, color: TEXT_DIM }}>
           Sharpe = (ann. return − {((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}% BI-Rate) / ann. vol ·
+          {net ? ' net = gross − IDX turnover cost (liquidity-aware half-spread + fees) at each rebalance · ' : ' '}
           Annualized metrics are volatile at short horizons; stabilize ~63 trading days from inception.
         </div>
       </div>
@@ -509,7 +592,7 @@ export default function App() {
       {/* ── Performance chart ───────────────────────────────────────────── */}
       <div style={s.panel}>
         <div style={s.sectionLabel}>
-          Indexed Performance · rebased to 100 at {inception}
+          Indexed Performance · rebased to 100 at {inception} · {configLabel} · {freqLabel} · {net ? 'net' : 'gross'}
         </div>
 
         {!chartRows?.length ? (
@@ -560,7 +643,7 @@ export default function App() {
                   type="monotone"
                   dataKey={p.id}
                   name={p.label}
-                  stroke={COLORS[p.id] ?? '#64748B'}
+                  stroke={COLORS[baseOf(p)] ?? '#64748B'}
                   strokeWidth={2}
                   dot={false}
                   connectNulls
@@ -573,18 +656,17 @@ export default function App() {
 
         {/* Toggle chips */}
         <div style={s.legendRow}>
-          {['IHSG', ...(portfolios ?? []).map(p => p.id)].map(id => {
-            const label = id === 'IHSG' ? 'IHSG' : portfolios?.find(p => p.id === id)?.label ?? id;
-            const col   = COLORS[id] ?? '#64748B';
-            const on    = visible.has(id);
+          <button onClick={() => toggleLine('IHSG')} style={s.chip(COLORS.IHSG, visible.has('IHSG'))}>
+            <span style={s.dot(visible.has('IHSG') ? COLORS.IHSG : BORDER)} />
+            IHSG
+          </button>
+          {(portfolios ?? []).map(p => {
+            const col = COLORS[baseOf(p)] ?? '#64748B';
+            const on  = visible.has(p.id);
             return (
-              <button
-                key={id}
-                onClick={() => toggleLine(id)}
-                style={s.chip(col, on)}
-              >
+              <button key={p.id} onClick={() => toggleLine(p.id)} style={s.chip(col, on)}>
                 <span style={s.dot(on ? col : BORDER)} />
-                {label}
+                {p.label}
               </button>
             );
           })}
@@ -594,17 +676,14 @@ export default function App() {
       {/* ── Weight matrix ───────────────────────────────────────────────── */}
       <div style={s.panel}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-          <div style={s.sectionLabel}>Portfolio Weights</div>
+          <div style={s.sectionLabel}>Portfolio Weights · {configLabel}</div>
           {(rebalanceDates?.length ?? 0) > 1 && (
             <label style={{ fontSize: 9, color: TEXT_DIM, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
               REBALANCE
               <select
                 value={activeWeightDate ?? ''}
                 onChange={e => setWeightDate(e.target.value)}
-                style={{
-                  background: '#0A1628', color: TEXT_MED, border: `1px solid ${BORDER}`,
-                  borderRadius: 4, padding: '3px 6px', fontSize: 10, fontFamily: 'monospace', cursor: 'pointer',
-                }}
+                style={s.select}
               >
                 {rebalanceDates.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
@@ -624,7 +703,7 @@ export default function App() {
                   <tr>
                     <th style={s.thLeft}>Ticker</th>
                     {(portfolios ?? []).map(p => (
-                      <th key={p.id} style={{ ...s.th, color: COLORS[p.id] ?? TEXT_DIM }}>
+                      <th key={p.id} style={{ ...s.th, color: COLORS[baseOf(p)] ?? TEXT_DIM }}>
                         {p.label}
                       </th>
                     ))}
@@ -652,7 +731,7 @@ export default function App() {
                   <tr style={{ borderTop: `1px solid ${BORDER}` }}>
                     <td style={{ ...s.tdLeft, color: TEXT_DIM }}>TOTAL</td>
                     {(portfolios ?? []).map(p => {
-                      const total = weightRows.reduce((s, r) => s + (r[p.id] ?? 0), 0);
+                      const total = weightRows.reduce((acc, r) => acc + (r[p.id] ?? 0), 0);
                       const ok = Math.abs(total - 100) < 1;
                       return (
                         <td key={p.id} style={{ ...s.td(false), color: ok ? '#00FF88' : '#EF4444', fontWeight: 700 }}>
@@ -675,16 +754,16 @@ export default function App() {
       {/* ── Rebalance History & Attribution ─────────────────────────────── */}
       <div style={s.panel}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-          <span style={s.sectionLabel}>REBALANCE HISTORY & ATTRIBUTION</span>
+          <span style={s.sectionLabel}>REBALANCE HISTORY & ATTRIBUTION · {configLabel}</span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {(portfolios ?? []).map(p => (
               <button
                 key={p.id}
                 onClick={() => setAttrPortfolio(p.id)}
                 style={{
-                  background:    activeAttrId === p.id ? (COLORS[p.id] ?? '#64748B') : 'transparent',
-                  color:         activeAttrId === p.id ? '#05080F' : (COLORS[p.id] ?? TEXT_DIM),
-                  border:        `1px solid ${COLORS[p.id] ?? BORDER}`,
+                  background:    activeAttrId === p.id ? (COLORS[baseOf(p)] ?? '#64748B') : 'transparent',
+                  color:         activeAttrId === p.id ? '#05080F' : (COLORS[baseOf(p)] ?? TEXT_DIM),
+                  border:        `1px solid ${COLORS[baseOf(p)] ?? BORDER}`,
                   borderRadius:  4,
                   padding:       '2px 8px',
                   fontSize:      9,
@@ -693,7 +772,7 @@ export default function App() {
                   letterSpacing: 0.5,
                 }}
               >
-                {p.id}
+                {p.label}
               </button>
             ))}
           </div>
@@ -702,7 +781,7 @@ export default function App() {
         {(attribution?.weightRows?.length ?? 0) < 2 ? (
           <div style={{ color: TEXT_DIM, fontSize: 10, padding: '12px 0' }}>
             Attribution view requires 2 or more rebalance periods.
-            Check back after the first weekly rebalance on 2026-06-29.
+            Check back after the first weekly rebalance on {inception}.
           </div>
         ) : (
           <>

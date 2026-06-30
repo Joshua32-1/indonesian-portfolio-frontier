@@ -21,10 +21,12 @@ Quant and IDX terms used across this repo. Each entry: a one-line definition and
 - **`.JK`** — Yahoo suffix for IDX-listed tickers (`BBCA.JK`). The dashboard/`portfolios.json` use the bare symbol (`BBCA`).
 - **Ledoit-Wolf shrinkage** — pulls the sample covariance toward a scaled identity to reduce estimation noise; on by default. → `ledoitWolfShrinkage`.
 - **Liquidity penalty ramp** — diagonal inflation `0.9·(1 − e^(−7.5·stress))` raising the apparent risk of thinly-traded names. → `LIQ_PENALTY_CAP`, `LIQ_PENALTY_K`.
+- **Methodology matrix** — the forward test's 60 live streams = 10 configs × 6 variants. Config = `pert` (legacy PERT) + BL × prior{cap,shrunk,equal} × τ{0.01,0.03,0.10}; stream id = `<base>@<configTag>`. → `portfolios.json`, [FORWARD-TEST.md](FORWARD-TEST.md).
 - **Min-variance portfolio (◆)** — lowest portfolio variance subject to constraints. → `monteCarlo.js`.
 - **Monte Carlo** — repeated random sampling of return scenarios (default 100k paths) to evaluate portfolios. → `runMonteCarloSimulation`.
 - **Omega (Ω)** — BL view-uncertainty matrix (diagonal); larger Ω = less trust in analyst views. `omegaScale` is hardcoded at 0.05. → `computeViewUncertainty`.
 - **Oracle Sharpe portfolio (▲)** — highest Sharpe across scenario optima; a hindsight ceiling, **not investable**. → `monteCarlo.js`.
+- **Prior mode** — which equilibrium prior the BL blend anchors to: `cap` (market-cap, identity/default), `equal` (1/n), or `shrunk` (0.5·cap + 0.5·equal). → `applyPriorMode`, `blackLitterman.js`.
 - **Risk contribution** — each asset's share of total portfolio risk (sums to 1). → `computeRiskContributions`.
 - **Robust portfolio (★)** — the tail-aware fixed allocation; the recommended implementable output. → `monteCarlo.js`.
 - **Sharpe ratio** — `(μ_p − r_f)/σ_p`, excess return per unit of risk. → `sharpeRatio`.

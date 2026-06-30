@@ -1,19 +1,32 @@
 name: Weekly Rebalance PR
 
-# Re-runs the optimizer headlessly every Sunday and opens a PR with the new
-# portfolios.json weights for human review, so the PR is ready to merge before
-# Monday's market open. Nothing reaches production until the PR is merged (which
-# triggers the Vercel redeploy).
+# Re-runs the optimizer headlessly every Sunday and opens ONE PR with new
+# portfolios.json weights for human review, ready before Monday's market open.
+# Nothing reaches production until the PR is merged (which redeploys Vercel).
+#
+# Matrix design: the forward test tracks a methodology matrix (PERT + BL×prior×τ).
+# Each config runs as its own parallel job that writes ONLY its streams to an emit
+# artifact (`optimize.mjs --emit`), then a single merge job assembles them into
+# portfolios.json and opens the PR — so parallel jobs never clobber the shared file.
+#
+# COST: the weekly matrix is the HEADLINE subset (pert + BL cap × τ-sweep = 4 configs)
+# to stay within CI minutes. Re-seed the FULL 10-config matrix occasionally via the
+# local `scripts/seed-forward-matrix.mjs`, or extend `matrix.config` below + dispatch.
+#
+# Requires repo setting: Settings → Actions → General → Workflow permissions →
+# "Allow GitHub Actions to create and approve pull requests".
 
 on:
-  # Sundays 12:00 UTC = 19:00 WIB — fetches its own snapshot (Friday close); PR
-  # ready to merge before Monday open.
   schedule:
-    - cron: '0 12 * * 0'
+    - cron: '0 12 * * 0'   # Sundays 12:00 UTC = 19:00 WIB (fetches Friday close)
   workflow_dispatch:
     inputs:
       effective:
-        description: 'Effective date (YYYY-MM-DD). Blank = today (the run date).'
+        description: 'Effective date (YYYY-MM-DD). Blank = run date.'
+        required: false
+        default: ''
+      paths:
+        description: 'Optimizer paths (fidelity). Blank = config default (10000).'
         required: false
         default: ''
 
@@ -22,57 +35,85 @@ permissions:
   pull-requests: write
 
 jobs:
-  rebalance:
+  optimize:
     runs-on: ubuntu-latest
-    # ~80 min for the optimizer at 100k iterations / 10k optimizer paths, plus
-    # snapshot fetch + npm ci. Lower this if optimizerPaths is reduced in config.
-    timeout-minutes: 120
+    timeout-minutes: 120   # ~80 min/config at 100k iter / 10k paths
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { tag: pert,       methodology: pert, prior: '',    tau: '' }
+          - { tag: bl-cap-t01, methodology: bl,   prior: cap,   tau: '0.01' }
+          - { tag: bl-cap-t03, methodology: bl,   prior: cap,   tau: '0.03' }
+          - { tag: bl-cap-t10, methodology: bl,   prior: cap,   tau: '0.10' }
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: portfolio-app/package-lock.json
-
       - name: Install optimizer deps
         working-directory: portfolio-app
         run: npm ci
-
       - name: Fetch fresh optimizer snapshot (Yahoo + BI-Rate)
         working-directory: portfolio-app
         run: npm run fetch-snapshot
         env:
           NODE_OPTIONS: '--max-old-space-size=2048'
-
-      - name: Run optimizer → append rebalances to portfolios.json
+      - name: Optimize ${{ matrix.config.tag }} → emit artifact
         working-directory: portfolio-app
-        run: node scripts/optimize.mjs
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
-          REBALANCE_EFFECTIVE: ${{ github.event.inputs.effective }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/emit"
+          ARGS="--methodology ${{ matrix.config.methodology }} --emit $GITHUB_WORKSPACE/emit/weights-${{ matrix.config.tag }}.json"
+          [ -n "${{ github.event.inputs.effective }}" ] && ARGS="$ARGS --effective ${{ github.event.inputs.effective }}"
+          [ -n "${{ github.event.inputs.paths }}" ] && ARGS="$ARGS --paths ${{ github.event.inputs.paths }}"
+          if [ "${{ matrix.config.methodology }}" = "bl" ]; then
+            ARGS="$ARGS --prior-mode ${{ matrix.config.prior }} --tau ${{ matrix.config.tau }}"
+          fi
+          echo "optimize.mjs $ARGS"
+          node scripts/optimize.mjs $ARGS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weights-${{ matrix.config.tag }}
+          path: emit/weights-${{ matrix.config.tag }}.json
+          retention-days: 3
 
+  merge:
+    needs: optimize
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Download all config emit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: emit
+          pattern: weights-*
+          merge-multiple: true
+      - name: Merge emit artifacts → portfolios.json
+        run: node live-dashboard-portfolio/scripts/merge-rebalances.mjs emit/*.json
       - name: Open pull request
         uses: peter-evans/create-pull-request@v6
         with:
-          # Only the weights file — the regenerated rich snapshot stays on the runner.
           add-paths: live-dashboard-portfolio/data/portfolios.json
           branch: auto/weekly-rebalance
           delete-branch: true
-          commit-message: 'chore: weekly rebalance weights'
+          commit-message: 'chore: weekly rebalance weights (methodology matrix)'
           title: 'Weekly rebalance — review new weights'
           body: |
-            Automated weekly rebalance produced by `portfolio-app/scripts/optimize.mjs`.
+            Automated weekly rebalance — methodology matrix (PERT + BL cap×τ headline subset),
+            produced by `portfolio-app/scripts/optimize.mjs --emit` + `merge-rebalances.mjs`.
 
             **Review before merging:**
-            - Check the weight diff per strategy below.
-            - Confirm each strategy's weights still sum to ~1.00 (the script enforces this).
+            - Check the per-stream weight diff (ids `<base>@<configTag>`).
+            - Each stream's weights sum to ~1.00 (enforced by the merge script).
             - Merging redeploys the Vercel dashboard with the new `effective` weights.
 
-            Methodology is controlled by `portfolio-app/optimizer-config.json`.
             See [`FORWARD-TEST.md`](../blob/main/FORWARD-TEST.md) for the protocol.
 
             🤖 Generated with [Claude Code](https://claude.com/claude-code)

@@ -1,15 +1,20 @@
 /**
  * backtestEngine.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Pure-JS covariance-only walk-forward backtest. No React / DOM / I/O.
+ * Pure-JS, cost-aware walk-forward backtest engine. No React / DOM / I/O. Three entry points
+ * over the same per-step machinery: runBacktest (live min-variance vs equal-weight vs IHSG
+ * explorer); runStrategyBacktest (precompute — the production tail-aware machinery: Max-Sharpe
+ * + tail-λ variants — across weekly/monthly/quarterly with a turnover-penalty κ sweep); and
+ * runLiveStrategy (single-frequency, in-browser Web Worker sibling).
  *
- * For each weekly rebalance date t (using ONLY data ≤ t — no look-ahead):
+ * For each rebalance date t (using ONLY data ≤ t — no look-ahead):
  *   ρ  = weekly Pearson over the trailing 1 year      (computeCorrelationFromDateRange)
- *   σ  = theta-decay daily vol, halfLife 63, 252d      (resolveDailyVol/computeThetaDecayedVol)
+ *   σ  = theta-decay daily vol, halfLife 63, 252d      (computeThetaDecayedVol)
  *   Σ  = ρ·σ·σ with Ledoit-Wolf shrinkage              (computeCovarianceMatrix)
- *   w  = min-variance, long-only, sum-to-1, no caps    (findMinVariancePortfolio, deterministic)
- * then hold one week and book the realized return. Equal-weight and IHSG are tracked
- * alongside. Returns are GROSS (no transaction costs).
+ *   w  = strategy weights (min-var / Max-Sharpe / tail-λ, per entry point)
+ * then hold to the next rebalance and book the realized return. Returns are reported NET of an
+ * IDX transaction-cost model (liquidity-aware half-spread + asymmetric buy/sell fees on
+ * drift-adjusted turnover), with GROSS shown alongside. Equal-weight and IHSG are tracked too.
  *
  * Optional turnover penalty (opts.kappa > 0): the min-variance step is penalized toward
  * the drifted prior weights (minVarTurnoverPenalized), trading a little variance for less
@@ -29,6 +34,7 @@ import {
   DEFAULT_VOL_HALF_LIFE,
 } from '../../portfolio-app/src/math/matrixEngine.js';
 import { findMinVariancePortfolio, optimizeTailAware } from '../../portfolio-app/src/math/monteCarlo.js';
+import { makeRng } from '../../portfolio-app/src/math/robustObjective.js';
 import { computeEquilibriumReturns, defaultDelta } from '../../portfolio-app/src/math/blackLitterman.js';
 
 const CORR_WINDOW_DAYS = 365; // trailing 1-year weekly correlation window
@@ -738,17 +744,23 @@ function capVector(w, maxPos, secCap, sectorOf) {
 /**
  * Strategy weight path on a grid (sequential: turnover penalty links steps via drift).
  * mode 'avgMuSharpe' = Max-Sharpe (no tail penalty); 'tailAware' = tail-penalty λ.
+ *
+ * `seed` (optional): when set, each step i draws its Monte-Carlo tail shocks from
+ * makeRng((seed + i) >>> 0). Using the SAME (seed, step) across every variant AND the
+ * κ-sweep gives common random numbers — shared noise cancels in their differences, so
+ * the comparisons are sharper and byte-reproducible. seed == null ⇒ Math.random (jitters).
  */
-function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIter, rf, constraints = DEFAULT_CONSTRAINTS }) {
+function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIter, rf, seed = null, constraints = DEFAULT_CONSTRAINTS }) {
   const weights = [];
   for (let i = 0; i < contexts.length; i++) {
     const c = contexts[i];
     const scenarios = Array.from({ length: paths }, () => c.muEq); // empirical = equilibrium-centered
     const currentWeights = kappa > 0 && i > 0 ? driftWeights(weights[i - 1], contexts[i - 1].rVec) : null;
+    const rng = seed != null ? makeRng((seed + i) >>> 0) : Math.random;
     const { weights: w } = optimizeTailAware(scenarios, c.covMatrix, c.volAssets, {
       sectorCaps: constraints.sectorCaps, maxPositionCap: constraints.maxPositionCap, riskFreeRate: rf,
       robustMode: mode, tailPenalty, turnoverPenalty: kappa, currentWeights,
-      deterministicStarts: true, optimizeMaxIter,
+      deterministicStarts: true, optimizeMaxIter, rng,
     });
     weights.push(w);
   }
@@ -856,6 +868,8 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     tailPenalty = 0.5,              // reference λ used for the κ-sweep
     optimizeMaxIter = 100,          // hill-climb iterations; lower = faster precompute
     volHalfLife = DEFAULT_VOL_HALF_LIFE,
+    seed = 12345,                   // fixed RNG seed ⇒ byte-reproducible + common random numbers
+    priorMode = 'cap',              // BL-equilibrium prior weights: 'cap' | 'shrunk' | 'equal'
   } = opts;
 
   const prep = prepareStrategyInputs(data, includedTickers, volHalfLife);
@@ -873,7 +887,7 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     if (grid.length < 6) { warnings.push(`${freqKey}: too few rebalances (${grid.length}).`); continue; }
     const ppy = freq.periodsPerYear;
 
-    const { contexts, lookAhead } = buildStepContexts(grid, sharedCtx);
+    const { contexts, lookAhead } = buildStepContexts(grid, { ...sharedCtx, priorMode });
     if (lookAhead && !lookAheadAny) lookAheadAny = lookAhead;
     const benchRets = contexts.map(c => c.ihsgRet);
     const dates = [...contexts.map(c => c.t), grid[grid.length - 1].date];
@@ -890,7 +904,7 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     const curves = {};
     const metrics = {};
     for (const v of variants) {
-      const w = walkVariant(contexts, { mode: v.mode, tailPenalty: v.tailPenalty, kappa, paths, optimizeMaxIter, rf });
+      const w = walkVariant(contexts, { mode: v.mode, tailPenalty: v.tailPenalty, kappa, paths, optimizeMaxIter, rf, seed });
       const costed = costStrategy(w, contexts, hasLiquidity, rf, benchRets, ppy);
       curves[v.key] = { grossEq: round2(costed.grossEq), netEq: round2(costed.netEq) };
       metrics[v.key] = packNet(costed);
@@ -904,7 +918,7 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
 
     // κ-sweep at the reference variant λ (tailPenalty) — run for EVERY frequency.
     const sweep = kappaSweep.map(k => {
-      const w = walkVariant(contexts, { mode: 'tailAware', tailPenalty, kappa: k, paths, optimizeMaxIter, rf });
+      const w = walkVariant(contexts, { mode: 'tailAware', tailPenalty, kappa: k, paths, optimizeMaxIter, rf, seed });
       return { kappa: k, ...packNet(costStrategy(w, contexts, hasLiquidity, rf, benchRets, ppy)) };
     });
 
@@ -931,7 +945,7 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
       variants: variants.map(v => ({ key: v.key, label: v.label, mode: v.mode, tailPenalty: v.tailPenalty })),
       lambdas: variants.filter(v => v.mode === 'tailAware').map(v => v.tailPenalty),
       kappa, kappaSweep, frequencies, paths, tailPenalty,
-      capMode, costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
+      seed, priorMode, capMode, costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
     },
     window: { start: rebalanceRows[0]?.date, end: rebalanceRows[rebalanceRows.length - 1]?.date, newestListing, nTickers: included.length, riskFreeRate: rf },
     byFrequency,
@@ -978,6 +992,8 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
     maxPositionCap = 1,             // per-name weight cap (1 = off); reins in every strategy
     priorMode = 'cap',             // BL prior reference weights: 'cap' | 'shrunk' | 'equal'
     sectorCap = null,              // per-sector weight cap (null/≥1 = off); needs SECTOR_MAP
+    seed = 12345,                  // fixed RNG seed ⇒ identical settings give identical curves
+                                   // (no Monte-Carlo jitter on recompute); pass null for live noise
   } = opts;
 
   const freq = FREQUENCIES[frequency];
@@ -1042,11 +1058,11 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
   // turnover term, so relying on it would silently leave Max-Sharpe un-penalized.
   progress('Optimizing Max-Sharpe…');
   addStrategy('MaxSharpe', capPath(blendTowardDrift(
-    walkVariant(contexts, { mode: 'avgMuSharpe', tailPenalty: 0, kappa: 0, paths, optimizeMaxIter, rf }), contexts, kappa)));
+    walkVariant(contexts, { mode: 'avgMuSharpe', tailPenalty: 0, kappa: 0, paths, optimizeMaxIter, rf, seed }), contexts, kappa)));
   done += 1;
   progress(`Optimizing Tail λ=${lambda}…`);
   addStrategy('Tail', capPath(blendTowardDrift(
-    walkVariant(contexts, { mode: 'tailAware', tailPenalty: lambda, kappa: 0, paths, optimizeMaxIter, rf }), contexts, kappa)));
+    walkVariant(contexts, { mode: 'tailAware', tailPenalty: lambda, kappa: 0, paths, optimizeMaxIter, rf, seed }), contexts, kappa)));
   done += 1;
 
   // Baselines: Min-Var honors κ via the same blend (minVarTurnoverPenalized) then the caps;
