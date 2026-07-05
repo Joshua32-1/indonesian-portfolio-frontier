@@ -43,7 +43,9 @@ node scripts/merge-rebalances.mjs <emit…> # assemble per-config emit artifacts
 
 **Forward-test matrix (optimizer side):** `portfolio-app/scripts/optimize.mjs` is BL-capable per run via flags — `--methodology pert|bl`, `--prior-mode cap|shrunk|equal`, `--tau <n>`, `--emit <file>` — and tags emitted stream ids `<base>@<configTag>`. The config **default is still legacy PERT** (`optimizer-config.json → factorConfig.useFactorModel:false`). Seed the full 10-config matrix locally with `portfolio-app/scripts/seed-forward-matrix.mjs` (sequential, resumable). See [FORWARD-TEST.md](FORWARD-TEST.md).
 
-**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** — `optimize.mjs --emit` per headline config → `merge-rebalances.mjs` → one PR).
+**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** — `optimize.mjs --emit` per headline config → `merge-rebalances.mjs` → one PR), `refresh-backtest.yml` (weekly full backtest sweep — `npm run fetch && npm run backtest` → commits `backtest-results.json`).
+
+**Ticker universe:** the investable list lives once in [`portfolio-app/data/universe.js`](portfolio-app/data/universe.js) (`UNIVERSE_JK`, `.JK` suffix) and is imported by all three fetch scripts. The dashboard fetch unions in any ticker still held in `portfolios.json` so removed names stay tracked; the optimizer/backtest use the canonical list. See the [`add-ticker`](.claude/skills/add-ticker/SKILL.md) skill.
 
 ## Golden rules
 

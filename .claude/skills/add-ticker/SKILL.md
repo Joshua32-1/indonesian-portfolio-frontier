@@ -9,7 +9,9 @@ The investable universe is defined in one place but ripples through snapshots, s
 
 ## 1. Edit the source list
 
-`portfolio-app/data/fetch-snapshot.js` → the `TICKERS` array. Use the Yahoo `.JK` suffix, e.g. `'GOTO.JK'`. (Currently 25 tickers, `BBCA.JK … ISAT.JK`.)
+`portfolio-app/data/universe.js` → the `UNIVERSE_JK` array. Use the Yahoo `.JK` suffix, e.g. `'GOTO.JK'`. (Currently 25 tickers, `BBCA.JK … ISAT.JK`.)
+
+This is the **single source of truth**: all three fetch scripts (`portfolio-app/data/fetch-snapshot.js`, `backtest-portfolio/scripts/fetch-backtest-history.mjs`, `live-dashboard-portfolio/scripts/fetch-daily-snapshot.mjs`) import it, so one edit propagates everywhere. Note the dashboard fetch additionally **unions in** any ticker still referenced in `portfolios.json`, so a name you *remove* from `UNIVERSE_JK` keeps getting priced (and tracked) on the dashboard as long as past rebalances hold it.
 
 ## 2. Regenerate the optimizer snapshot
 

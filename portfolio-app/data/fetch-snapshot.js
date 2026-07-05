@@ -23,6 +23,7 @@ import {
   VOL_LOOKBACK_DAYS,
 } from '../src/math/matrixEngine.js';
 import { resolveSectorFromQuoteSummary } from '../src/math/assetSector.js';
+import { UNIVERSE_JK } from './universe.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const yahooFinance = new YahooFinance({
@@ -34,14 +35,8 @@ const JAKARTA_TZ = 'Asia/Jakarta';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-/** IDX tickers to include in the snapshot. */
-const TICKERS = [
-  'BBCA.JK', 'BBRI.JK', 'BMRI.JK', 'TLKM.JK', 'ASII.JK', 'BIRD.JK',
-  'INDF.JK', 'ICBP.JK', 'JSMR.JK', 'KLBF.JK', 'SIDO.JK', 'ANTM.JK',
-  'BBNI.JK', 'BNGA.JK', 'CMRY.JK', 'PWON.JK', 'AMRT.JK', 'INCO.JK', 
-  'NCKL.JK', 'MDKA.JK', 'AADI.JK', 'UNTR.JK', 'LSIP.JK', 'CPIN.JK',
-  'ISAT.JK'
-];
+/** IDX tickers to include in the snapshot — single source of truth in ./universe.js. */
+const TICKERS = UNIVERSE_JK;
 
 /** Yahoo Finance quoteSummary modules used per ticker. */
 const QUOTE_SUMMARY_MODULES = [
