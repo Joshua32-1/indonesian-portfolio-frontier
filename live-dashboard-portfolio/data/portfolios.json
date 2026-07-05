@@ -1,7 +1,7 @@
 {
   "_comment": "Forward-test methodology matrix. config = pert (legacy PERT) + BL × prior{cap,shrunk,equal} × τ{0.01,0.03,0.10}; variant = 6 strategies; id = `<base>@<configTag>`. Frequency (weekly/monthly/quarterly) and gross/net are DERIVED in the dashboard. Append dated rebalance rows per stream (optimize.mjs / weekly cron); never overwrite. Regenerate this skeleton with scripts/init-portfolios-matrix.mjs.",
   "inception": "2026-06-30",
-  "updated": "2026-06-30",
+  "updated": "2026-07-05",
   "riskFreeRate": 0.0575,
   "portfolios": [
     {
@@ -40,6 +40,36 @@
             "LSIP": 0.0318,
             "CPIN": 0.0851,
             "ISAT": 0.0291
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.0029,
+            "BMRI": 0.0196,
+            "TLKM": 0,
+            "ASII": 0,
+            "BIRD": 0.1098,
+            "INDF": 0,
+            "ICBP": 0,
+            "JSMR": 0.0897,
+            "KLBF": 0.1299,
+            "SIDO": 0.0786,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.0621,
+            "CMRY": 0.0572,
+            "PWON": 0.1691,
+            "AMRT": 0,
+            "INCO": 0,
+            "NCKL": 0.0554,
+            "MDKA": 0,
+            "AADI": 0.1233,
+            "UNTR": 0,
+            "LSIP": 0.0391,
+            "CPIN": 0.0633,
+            "ISAT": 0
           }
         }
       ]
@@ -81,6 +111,36 @@
             "CPIN": 0.01,
             "ISAT": 0.0066
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.01,
+            "BMRI": 0.0347,
+            "TLKM": 0,
+            "ASII": 0.0303,
+            "BIRD": 0.1528,
+            "INDF": 0.0638,
+            "ICBP": 0.0763,
+            "JSMR": 0.0575,
+            "KLBF": 0.0259,
+            "SIDO": 0.1159,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.1637,
+            "CMRY": 0.0733,
+            "PWON": 0.022,
+            "AMRT": 0.01,
+            "INCO": 0,
+            "NCKL": 0,
+            "MDKA": 0,
+            "AADI": 0.1079,
+            "UNTR": 0.0066,
+            "LSIP": 0.0435,
+            "CPIN": 0,
+            "ISAT": 0.0058
+          }
         }
       ]
     },
@@ -119,6 +179,36 @@
             "UNTR": 0,
             "LSIP": 0.0209,
             "CPIN": 0.05,
+            "ISAT": 0
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0,
+            "BMRI": 0,
+            "TLKM": 0,
+            "ASII": 0,
+            "BIRD": 0.11,
+            "INDF": 0,
+            "ICBP": 0.0354,
+            "JSMR": 0.07,
+            "KLBF": 0.1344,
+            "SIDO": 0.0973,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.0949,
+            "CMRY": 0.0973,
+            "PWON": 0.1552,
+            "AMRT": 0,
+            "INCO": 0,
+            "NCKL": 0.036,
+            "MDKA": 0,
+            "AADI": 0.1395,
+            "UNTR": 0,
+            "LSIP": 0.02,
+            "CPIN": 0.01,
             "ISAT": 0
           }
         }
@@ -161,6 +251,36 @@
             "CPIN": 0.05,
             "ISAT": 0
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0,
+            "BMRI": 0,
+            "TLKM": 0,
+            "ASII": 0,
+            "BIRD": 0.11,
+            "INDF": 0,
+            "ICBP": 0.04,
+            "JSMR": 0.0717,
+            "KLBF": 0.13,
+            "SIDO": 0.1,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.1,
+            "CMRY": 0.0967,
+            "PWON": 0.1449,
+            "AMRT": 0,
+            "INCO": 0,
+            "NCKL": 0.0317,
+            "MDKA": 0,
+            "AADI": 0.135,
+            "UNTR": 0,
+            "LSIP": 0.03,
+            "CPIN": 0.01,
+            "ISAT": 0
+          }
         }
       ]
     },
@@ -199,6 +319,36 @@
             "UNTR": 0,
             "LSIP": 0.03,
             "CPIN": 0.0483,
+            "ISAT": 0
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0,
+            "BMRI": 0,
+            "TLKM": 0,
+            "ASII": 0,
+            "BIRD": 0.1183,
+            "INDF": 0,
+            "ICBP": 0.04,
+            "JSMR": 0.07,
+            "KLBF": 0.12,
+            "SIDO": 0.1,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.1167,
+            "CMRY": 0.0967,
+            "PWON": 0.1383,
+            "AMRT": 0,
+            "INCO": 0,
+            "NCKL": 0.03,
+            "MDKA": 0,
+            "AADI": 0.13,
+            "UNTR": 0,
+            "LSIP": 0.03,
+            "CPIN": 0.01,
             "ISAT": 0
           }
         }
@@ -241,6 +391,36 @@
             "CPIN": 0.04,
             "ISAT": 0
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0,
+            "BMRI": 0.01,
+            "TLKM": 0,
+            "ASII": 0,
+            "BIRD": 0.123,
+            "INDF": 0,
+            "ICBP": 0.0485,
+            "JSMR": 0.0614,
+            "KLBF": 0.1129,
+            "SIDO": 0.1129,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.1234,
+            "CMRY": 0.0898,
+            "PWON": 0.1228,
+            "AMRT": 0,
+            "INCO": 0,
+            "NCKL": 0.0271,
+            "MDKA": 0,
+            "AADI": 0.1241,
+            "UNTR": 0,
+            "LSIP": 0.0341,
+            "CPIN": 0.01,
+            "ISAT": 0
+          }
         }
       ]
     },
@@ -280,6 +460,36 @@
             "LSIP": 0,
             "CPIN": 0.0544,
             "ISAT": 0.0462
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.1083,
+            "BBRI": 0.0946,
+            "BMRI": 0.0591,
+            "TLKM": 0.0967,
+            "ASII": 0.0508,
+            "BIRD": 0,
+            "INDF": 0,
+            "ICBP": 0.0084,
+            "JSMR": 0.0195,
+            "KLBF": 0.0396,
+            "SIDO": 0,
+            "ANTM": 0.0489,
+            "BBNI": 0.0766,
+            "BNGA": 0,
+            "CMRY": 0,
+            "PWON": 0.0767,
+            "AMRT": 0.0489,
+            "INCO": 0.0476,
+            "NCKL": 0.0538,
+            "MDKA": 0.0408,
+            "AADI": 0,
+            "UNTR": 0.0506,
+            "LSIP": 0,
+            "CPIN": 0.0492,
+            "ISAT": 0.0299
           }
         }
       ]
@@ -321,6 +531,36 @@
             "CPIN": 0.01,
             "ISAT": 0.0066
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.01,
+            "BMRI": 0.0347,
+            "TLKM": 0,
+            "ASII": 0.0303,
+            "BIRD": 0.1528,
+            "INDF": 0.0638,
+            "ICBP": 0.0763,
+            "JSMR": 0.0575,
+            "KLBF": 0.0259,
+            "SIDO": 0.1159,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.1637,
+            "CMRY": 0.0733,
+            "PWON": 0.022,
+            "AMRT": 0.01,
+            "INCO": 0,
+            "NCKL": 0,
+            "MDKA": 0,
+            "AADI": 0.1079,
+            "UNTR": 0.0066,
+            "LSIP": 0.0435,
+            "CPIN": 0,
+            "ISAT": 0.0058
+          }
         }
       ]
     },
@@ -360,6 +600,36 @@
             "LSIP": 0.01,
             "CPIN": 0.04,
             "ISAT": 0.04
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.0677,
+            "BBRI": 0.0738,
+            "BMRI": 0.06,
+            "TLKM": 0.0543,
+            "ASII": 0.0474,
+            "BIRD": 0.02,
+            "INDF": 0.03,
+            "ICBP": 0.04,
+            "JSMR": 0.04,
+            "KLBF": 0.05,
+            "SIDO": 0.02,
+            "ANTM": 0.0372,
+            "BBNI": 0.05,
+            "BNGA": 0.05,
+            "CMRY": 0.04,
+            "PWON": 0.06,
+            "AMRT": 0.0294,
+            "INCO": 0.0277,
+            "NCKL": 0.0368,
+            "MDKA": 0.02,
+            "AADI": 0.04,
+            "UNTR": 0.04,
+            "LSIP": 0.01,
+            "CPIN": 0.03,
+            "ISAT": 0.0257
           }
         }
       ]
@@ -401,6 +671,36 @@
             "CPIN": 0.04,
             "ISAT": 0.0387
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.04,
+            "BBRI": 0.06,
+            "BMRI": 0.0567,
+            "TLKM": 0.04,
+            "ASII": 0.05,
+            "BIRD": 0.04,
+            "INDF": 0.04,
+            "ICBP": 0.05,
+            "JSMR": 0.04,
+            "KLBF": 0.04,
+            "SIDO": 0.05,
+            "ANTM": 0.03,
+            "BBNI": 0.0433,
+            "BNGA": 0.08,
+            "CMRY": 0.05,
+            "PWON": 0.055,
+            "AMRT": 0.03,
+            "INCO": 0.02,
+            "NCKL": 0.0217,
+            "MDKA": 0.02,
+            "AADI": 0.0483,
+            "UNTR": 0.03,
+            "LSIP": 0.02,
+            "CPIN": 0.02,
+            "ISAT": 0.025
+          }
         }
       ]
     },
@@ -441,6 +741,36 @@
             "CPIN": 0.04,
             "ISAT": 0.03
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.03,
+            "BBRI": 0.05,
+            "BMRI": 0.06,
+            "TLKM": 0.0161,
+            "ASII": 0.0411,
+            "BIRD": 0.0661,
+            "INDF": 0.0438,
+            "ICBP": 0.0563,
+            "JSMR": 0.0475,
+            "KLBF": 0.0459,
+            "SIDO": 0.0659,
+            "ANTM": 0.0233,
+            "BBNI": 0.03,
+            "BNGA": 0.0936,
+            "CMRY": 0.0533,
+            "PWON": 0.0494,
+            "AMRT": 0.0247,
+            "INCO": 0.0142,
+            "NCKL": 0.025,
+            "MDKA": 0.0066,
+            "AADI": 0.0579,
+            "UNTR": 0.03,
+            "LSIP": 0.0235,
+            "CPIN": 0.02,
+            "ISAT": 0.0258
+          }
         }
       ]
     },
@@ -479,6 +809,36 @@
             "UNTR": 0.04,
             "LSIP": 0.03,
             "CPIN": 0.03,
+            "ISAT": 0.02
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.02,
+            "BBRI": 0.0421,
+            "BMRI": 0.05,
+            "TLKM": 0.0109,
+            "ASII": 0.0424,
+            "BIRD": 0.0824,
+            "INDF": 0.0533,
+            "ICBP": 0.0626,
+            "JSMR": 0.0517,
+            "KLBF": 0.0417,
+            "SIDO": 0.0838,
+            "ANTM": 0.0208,
+            "BBNI": 0.03,
+            "BNGA": 0.0999,
+            "CMRY": 0.0627,
+            "PWON": 0.05,
+            "AMRT": 0.02,
+            "INCO": 0,
+            "NCKL": 0.02,
+            "MDKA": 0.0031,
+            "AADI": 0.0726,
+            "UNTR": 0.02,
+            "LSIP": 0.03,
+            "CPIN": 0.01,
             "ISAT": 0.02
           }
         }
@@ -521,6 +881,36 @@
             "CPIN": 0.0558,
             "ISAT": 0.0435
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.0509,
+            "BBRI": 0.0694,
+            "BMRI": 0.0492,
+            "TLKM": 0.0497,
+            "ASII": 0.0389,
+            "BIRD": 0.0067,
+            "INDF": 0,
+            "ICBP": 0.0331,
+            "JSMR": 0.0494,
+            "KLBF": 0.0606,
+            "SIDO": 0.018,
+            "ANTM": 0.0406,
+            "BBNI": 0.051,
+            "BNGA": 0.0419,
+            "CMRY": 0.0368,
+            "PWON": 0.1025,
+            "AMRT": 0.0422,
+            "INCO": 0.0304,
+            "NCKL": 0.0557,
+            "MDKA": 0.0259,
+            "AADI": 0.0416,
+            "UNTR": 0.0351,
+            "LSIP": 0.0067,
+            "CPIN": 0.0426,
+            "ISAT": 0.0211
+          }
         }
       ]
     },
@@ -560,6 +950,36 @@
             "LSIP": 0.0509,
             "CPIN": 0.01,
             "ISAT": 0.0066
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.01,
+            "BMRI": 0.0347,
+            "TLKM": 0,
+            "ASII": 0.0303,
+            "BIRD": 0.1528,
+            "INDF": 0.0638,
+            "ICBP": 0.0763,
+            "JSMR": 0.0575,
+            "KLBF": 0.0259,
+            "SIDO": 0.1159,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.1637,
+            "CMRY": 0.0733,
+            "PWON": 0.022,
+            "AMRT": 0.01,
+            "INCO": 0,
+            "NCKL": 0,
+            "MDKA": 0,
+            "AADI": 0.1079,
+            "UNTR": 0.0066,
+            "LSIP": 0.0435,
+            "CPIN": 0,
+            "ISAT": 0.0058
           }
         }
       ]
@@ -601,6 +1021,36 @@
             "CPIN": 0.04,
             "ISAT": 0.03
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.0374,
+            "BBRI": 0.0621,
+            "BMRI": 0.04,
+            "TLKM": 0.0265,
+            "ASII": 0.033,
+            "BIRD": 0.0434,
+            "INDF": 0.0333,
+            "ICBP": 0.0456,
+            "JSMR": 0.0517,
+            "KLBF": 0.059,
+            "SIDO": 0.0458,
+            "ANTM": 0.026,
+            "BBNI": 0.0336,
+            "BNGA": 0.0658,
+            "CMRY": 0.0586,
+            "PWON": 0.0906,
+            "AMRT": 0.026,
+            "INCO": 0.022,
+            "NCKL": 0.0415,
+            "MDKA": 0.018,
+            "AADI": 0.052,
+            "UNTR": 0.0363,
+            "LSIP": 0.0139,
+            "CPIN": 0.0212,
+            "ISAT": 0.0167
+          }
         }
       ]
     },
@@ -640,6 +1090,36 @@
             "LSIP": 0.02,
             "CPIN": 0.03,
             "ISAT": 0.03
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.03,
+            "BBRI": 0.0522,
+            "BMRI": 0.04,
+            "TLKM": 0.0209,
+            "ASII": 0.0409,
+            "BIRD": 0.0609,
+            "INDF": 0.04,
+            "ICBP": 0.0567,
+            "JSMR": 0.0409,
+            "KLBF": 0.0512,
+            "SIDO": 0.0604,
+            "ANTM": 0.03,
+            "BBNI": 0.03,
+            "BNGA": 0.0798,
+            "CMRY": 0.06,
+            "PWON": 0.07,
+            "AMRT": 0.03,
+            "INCO": 0.0151,
+            "NCKL": 0.03,
+            "MDKA": 0.0151,
+            "AADI": 0.0612,
+            "UNTR": 0.0247,
+            "LSIP": 0.02,
+            "CPIN": 0.02,
+            "ISAT": 0.02
           }
         }
       ]
@@ -681,6 +1161,36 @@
             "CPIN": 0.03,
             "ISAT": 0.03
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.0267,
+            "BBRI": 0.045,
+            "BMRI": 0.0467,
+            "TLKM": 0.0133,
+            "ASII": 0.0333,
+            "BIRD": 0.08,
+            "INDF": 0.04,
+            "ICBP": 0.05,
+            "JSMR": 0.05,
+            "KLBF": 0.05,
+            "SIDO": 0.07,
+            "ANTM": 0.0267,
+            "BBNI": 0.02,
+            "BNGA": 0.09,
+            "CMRY": 0.06,
+            "PWON": 0.0683,
+            "AMRT": 0.02,
+            "INCO": 0.01,
+            "NCKL": 0.03,
+            "MDKA": 0.01,
+            "AADI": 0.07,
+            "UNTR": 0.02,
+            "LSIP": 0.03,
+            "CPIN": 0.02,
+            "ISAT": 0.02
+          }
         }
       ]
     },
@@ -720,6 +1230,36 @@
             "LSIP": 0.03,
             "CPIN": 0.02,
             "ISAT": 0.0211
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.02,
+            "BBRI": 0.04,
+            "BMRI": 0.05,
+            "TLKM": 0,
+            "ASII": 0.043,
+            "BIRD": 0.0994,
+            "INDF": 0.0534,
+            "ICBP": 0.0529,
+            "JSMR": 0.0517,
+            "KLBF": 0.049,
+            "SIDO": 0.0758,
+            "ANTM": 0.0312,
+            "BBNI": 0.02,
+            "BNGA": 0.0958,
+            "CMRY": 0.0686,
+            "PWON": 0.0606,
+            "AMRT": 0.016,
+            "INCO": 0,
+            "NCKL": 0.0215,
+            "MDKA": 0,
+            "AADI": 0.0805,
+            "UNTR": 0.0167,
+            "LSIP": 0.0239,
+            "CPIN": 0.01,
+            "ISAT": 0.02
           }
         }
       ]
@@ -761,6 +1301,36 @@
             "CPIN": 0.0614,
             "ISAT": 0.0381
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0.0047,
+            "BBRI": 0.0434,
+            "BMRI": 0.033,
+            "TLKM": 0.0081,
+            "ASII": 0.021,
+            "BIRD": 0.057,
+            "INDF": 0,
+            "ICBP": 0.0386,
+            "JSMR": 0.0662,
+            "KLBF": 0.0807,
+            "SIDO": 0.0544,
+            "ANTM": 0.0293,
+            "BBNI": 0.0222,
+            "BNGA": 0.0771,
+            "CMRY": 0.0605,
+            "PWON": 0.1257,
+            "AMRT": 0.0327,
+            "INCO": 0.014,
+            "NCKL": 0.0579,
+            "MDKA": 0.0115,
+            "AADI": 0.0805,
+            "UNTR": 0.0133,
+            "LSIP": 0.0176,
+            "CPIN": 0.0421,
+            "ISAT": 0.0085
+          }
         }
       ]
     },
@@ -800,6 +1370,36 @@
             "LSIP": 0.0509,
             "CPIN": 0.01,
             "ISAT": 0.0066
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.01,
+            "BMRI": 0.0347,
+            "TLKM": 0,
+            "ASII": 0.0303,
+            "BIRD": 0.1528,
+            "INDF": 0.0638,
+            "ICBP": 0.0763,
+            "JSMR": 0.0575,
+            "KLBF": 0.0259,
+            "SIDO": 0.1159,
+            "ANTM": 0,
+            "BBNI": 0,
+            "BNGA": 0.1637,
+            "CMRY": 0.0733,
+            "PWON": 0.022,
+            "AMRT": 0.01,
+            "INCO": 0,
+            "NCKL": 0,
+            "MDKA": 0,
+            "AADI": 0.1079,
+            "UNTR": 0.0066,
+            "LSIP": 0.0435,
+            "CPIN": 0,
+            "ISAT": 0.0058
           }
         }
       ]
@@ -841,6 +1441,36 @@
             "CPIN": 0.05,
             "ISAT": 0.03
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.04,
+            "BMRI": 0.03,
+            "TLKM": 0,
+            "ASII": 0.0211,
+            "BIRD": 0.0619,
+            "INDF": 0.0204,
+            "ICBP": 0.0563,
+            "JSMR": 0.0575,
+            "KLBF": 0.0859,
+            "SIDO": 0.0659,
+            "ANTM": 0.0233,
+            "BBNI": 0.01,
+            "BNGA": 0.0936,
+            "CMRY": 0.0771,
+            "PWON": 0.1097,
+            "AMRT": 0.0247,
+            "INCO": 0.0135,
+            "NCKL": 0.0446,
+            "MDKA": 0.01,
+            "AADI": 0.0879,
+            "UNTR": 0.0166,
+            "LSIP": 0.02,
+            "CPIN": 0.02,
+            "ISAT": 0.01
+          }
         }
       ]
     },
@@ -880,6 +1510,36 @@
             "LSIP": 0.02,
             "CPIN": 0.04,
             "ISAT": 0.03
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.04,
+            "BMRI": 0.03,
+            "TLKM": 0,
+            "ASII": 0.0189,
+            "BIRD": 0.0795,
+            "INDF": 0.02,
+            "ICBP": 0.0578,
+            "JSMR": 0.06,
+            "KLBF": 0.0769,
+            "SIDO": 0.074,
+            "ANTM": 0.0186,
+            "BBNI": 0.02,
+            "BNGA": 0.1,
+            "CMRY": 0.0758,
+            "PWON": 0.1056,
+            "AMRT": 0.0195,
+            "INCO": 0.01,
+            "NCKL": 0.0389,
+            "MDKA": 0.01,
+            "AADI": 0.0845,
+            "UNTR": 0.02,
+            "LSIP": 0.02,
+            "CPIN": 0.02,
+            "ISAT": 0
           }
         }
       ]
@@ -921,6 +1581,36 @@
             "CPIN": 0.0404,
             "ISAT": 0.03
           }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.04,
+            "BMRI": 0.03,
+            "TLKM": 0,
+            "ASII": 0.02,
+            "BIRD": 0.0785,
+            "INDF": 0.03,
+            "ICBP": 0.0606,
+            "JSMR": 0.05,
+            "KLBF": 0.07,
+            "SIDO": 0.0831,
+            "ANTM": 0.0192,
+            "BBNI": 0.01,
+            "BNGA": 0.1101,
+            "CMRY": 0.08,
+            "PWON": 0.09,
+            "AMRT": 0.02,
+            "INCO": 0.01,
+            "NCKL": 0.0341,
+            "MDKA": 0.01,
+            "AADI": 0.0844,
+            "UNTR": 0.02,
+            "LSIP": 0.02,
+            "CPIN": 0.02,
+            "ISAT": 0.01
+          }
         }
       ]
     },
@@ -960,6 +1650,36 @@
             "LSIP": 0.0283,
             "CPIN": 0.041,
             "ISAT": 0.022
+          }
+        },
+        {
+          "effective": "2026-07-05",
+          "weights": {
+            "BBCA": 0,
+            "BBRI": 0.03,
+            "BMRI": 0.04,
+            "TLKM": 0,
+            "ASII": 0.02,
+            "BIRD": 0.1,
+            "INDF": 0.03,
+            "ICBP": 0.06,
+            "JSMR": 0.06,
+            "KLBF": 0.06,
+            "SIDO": 0.09,
+            "ANTM": 0.02,
+            "BBNI": 0.01,
+            "BNGA": 0.11,
+            "CMRY": 0.08,
+            "PWON": 0.08,
+            "AMRT": 0.02,
+            "INCO": 0,
+            "NCKL": 0.03,
+            "MDKA": 0,
+            "AADI": 0.09,
+            "UNTR": 0.01,
+            "LSIP": 0.03,
+            "CPIN": 0.02,
+            "ISAT": 0.01
           }
         }
       ]
