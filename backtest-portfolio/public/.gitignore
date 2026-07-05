@@ -1,0 +1,6 @@
+# Generated data — regenerate with `npm run fetch` / `npm run backtest`.
+# Only the 3 canonical reference artifacts (backtest-results{,-shrunk,-equal}.json)
+# are committed; the per-(prior,freq) shards, raw history, and progress log are not.
+backtest-history.json
+backtest-results-*-*.json
+.gen-progress.log
