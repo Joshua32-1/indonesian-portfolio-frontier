@@ -18,9 +18,10 @@
  */
 
 import YahooFinance from 'yahoo-finance2';
-import { writeFileSync, readFileSync } from 'fs';
+import { writeFileSync, readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { UNIVERSE_JK, toJK } from '../../portfolio-app/data/universe.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -30,13 +31,31 @@ const yahooFinance = new YahooFinance({
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
-const TICKERS = [
-  'BBCA.JK', 'BBRI.JK', 'BMRI.JK', 'TLKM.JK', 'ASII.JK', 'BIRD.JK',
-  'INDF.JK', 'ICBP.JK', 'JSMR.JK', 'KLBF.JK', 'SIDO.JK', 'ANTM.JK',
-  'BBNI.JK', 'BNGA.JK', 'CMRY.JK', 'PWON.JK', 'AMRT.JK', 'INCO.JK',
-  'NCKL.JK', 'MDKA.JK', 'AADI.JK', 'UNTR.JK', 'LSIP.JK', 'CPIN.JK',
-  'ISAT.JK',
-];
+/**
+ * Every bare ticker ever referenced across portfolios.json rebalances. Used to
+ * KEEP tracking names that were dropped from the canonical universe but are still
+ * held in past rebalances — without their price series the tracker can't render
+ * their historical contribution. Returns [] if the file is missing/unreadable.
+ */
+function heldTickers() {
+  const portfoliosPath = join(__dirname, '../data/portfolios.json');
+  if (!existsSync(portfoliosPath)) return [];
+  try {
+    const data = JSON.parse(readFileSync(portfoliosPath, 'utf-8'));
+    const bare = (data.portfolios ?? []).flatMap(p =>
+      (p.rebalances ?? []).flatMap(r => Object.keys(r.weights ?? {})));
+    return [...new Set(bare)].map(toJK);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch universe = canonical UNIVERSE_JK ∪ every held ticker in portfolios.json.
+ * The forward-test tracker therefore prices BOTH newly-added names and old names
+ * that have since left the canonical list — see universe.js.
+ */
+const TICKERS = [...new Set([...UNIVERSE_JK, ...heldTickers()])];
 
 const BENCHMARK_TICKER = '^JKSE';
 

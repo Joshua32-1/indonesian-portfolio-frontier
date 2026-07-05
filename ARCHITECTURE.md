@@ -10,10 +10,12 @@ my-portfolio-app/
 ├── .github/workflows/
 │   ├── refresh-dashboard.yml       # CI cron: daily lean dashboard snapshot
 │   ├── refresh-views.yml           # CI cron: weekly analyst-view capture (→ view-history/)
-│   └── weekly-rebalance.yml        # CI cron: automated weekly rebalance (runs optimize.mjs)
+│   ├── weekly-rebalance.yml        # CI cron: automated weekly rebalance (runs optimize.mjs)
+│   └── refresh-backtest.yml        # CI cron: weekly full backtest sweep (→ backtest-results.json)
 │
 ├── portfolio-app/                  # OPTIMIZER — local research tool
 │   ├── data/
+│   │   ├── universe.js              # UNIVERSE_JK — single source of truth for the ticker list
 │   │   ├── fetch-snapshot.js        # Yahoo + BI-Rate → live-market-snapshot.json (~1MB)
 │   │   ├── refresh-sectors.js       # update sector labels only
 │   │   ├── live-market-snapshot.json (generated)
@@ -110,3 +112,4 @@ Each daily bar compounds: `index_t = index_{t-1} · exp(Σ wᵢ(t)·rᵢ,t)`, wh
 - **Dashboard → Vercel.** `vercel.json` sets framework `vite`, install `npm ci`, build `npm run build`, output `dist`, with SPA rewrites. In the Vercel project, **Root Directory = `live-dashboard-portfolio`**. Every `git push` auto-redeploys.
 - **Optimizer:** local only; `npm run build` produces `dist/` but it isn't deployed.
 - **CI cron** (`.github/workflows/refresh-dashboard.yml`): weekdays at **11:00 UTC (18:00 WIB**, after IDX close). Steps: checkout → Node 20 → `npm ci` in the dashboard → `npm run fetch-snapshot` (with `NODE_OPTIONS=--max-old-space-size=512`) → commit `live-dashboard-portfolio/data/live-market-snapshot.json` **only if changed** → push (triggers Vercel). This is the source of the recurring `chore: refresh IDX daily snapshot` commits.
+- **Backtest CI cron** (`.github/workflows/refresh-backtest.yml`): weekly, **Sunday 12:00 UTC (19:00 WIB)**, plus manual dispatch. Steps: checkout → Node 20 → `npm ci` in `backtest-portfolio` → `npm run fetch` (rebuilds the gitignored `backtest-history.json` on the runner) → `npm run backtest` (full sweep, `NODE_OPTIONS=--max-old-space-size=4096`, 90-min timeout) → commit `backtest-portfolio/public/backtest-results.json` **only if changed**. Heavy (~45–60 min), hence weekly rather than daily. Per-prior variant files (`…-shrunk`/`…-equal`) are not regenerated here.

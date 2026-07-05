@@ -8,7 +8,7 @@
 - **Weekly bars since 2011** for correlation/history (`FULL_HISTORY = { start: '2011-01-01', interval: '1wk' }`); **daily bars (~last 252 trading days)** for volatility.
 - **Last completed bar only:** the fetch drops the in-progress week/day and any bar with a null adjusted close. Yahoo lags 1–2 sessions before adjusted closes finalize.
 - **Canonical week keys:** weekly bars are normalized so assets with odd anchoring (e.g. a Sunday-dated bar) align to the same week as the rest (`canonicalWeeklyKey` in `matrixEngine.js`).
-- **Fixed ticker universe** (25 IDX large-caps, `.JK`) hardcoded in `data/fetch-snapshot.js`. This introduces **survivorship bias** — delisted/merged names are not represented, and the list is not point-in-time.
+- **Fixed ticker universe** (25 IDX large-caps, `.JK`) defined once in `portfolio-app/data/universe.js` (`UNIVERSE_JK`) and imported by all three apps' fetch scripts. This introduces **survivorship bias** — delisted/merged names are not represented, and the list is not point-in-time. (The dashboard fetch additionally unions in any ticker still held in `portfolios.json`, so a removed name keeps being tracked, but the optimizer/backtest universe is the canonical list.)
 - **Minimum observations:** correlation needs ≥ `MIN_CORR_OBS = 20` weekly observations; the window auto-expands if too short.
 
 ## Risk-free rate

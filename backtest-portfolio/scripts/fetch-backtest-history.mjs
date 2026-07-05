@@ -20,6 +20,7 @@ import YahooFinance from 'yahoo-finance2'; // v3 — capitalised class import
 import { writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { UNIVERSE_JK } from '../../portfolio-app/data/universe.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const yahooFinance = new YahooFinance({
@@ -28,14 +29,8 @@ const yahooFinance = new YahooFinance({
 
 const JAKARTA_TZ = 'Asia/Jakarta';
 
-/** Same 25-name universe as the optimizer. */
-const TICKERS = [
-  'BBCA.JK', 'BBRI.JK', 'BMRI.JK', 'TLKM.JK', 'ASII.JK', 'BIRD.JK',
-  'INDF.JK', 'ICBP.JK', 'JSMR.JK', 'KLBF.JK', 'SIDO.JK', 'ANTM.JK',
-  'BBNI.JK', 'BNGA.JK', 'CMRY.JK', 'PWON.JK', 'AMRT.JK', 'INCO.JK',
-  'NCKL.JK', 'MDKA.JK', 'AADI.JK', 'UNTR.JK', 'LSIP.JK', 'CPIN.JK',
-  'ISAT.JK',
-];
+/** Same universe as the optimizer — single source of truth in portfolio-app/data/universe.js. */
+const TICKERS = UNIVERSE_JK;
 
 const BENCHMARK_TICKER = '^JKSE';
 
