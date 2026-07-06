@@ -37,13 +37,15 @@ npm run dev              # Vite dev server (port 5174) — live explorer + preco
 npm run dev              # Vite dev server
 npm run build            # vite build → dist/
 npm run fetch-snapshot   # node scripts/fetch-daily-snapshot.mjs — lean daily snapshot (incl. dollarVol; CI runs this)
-node scripts/init-portfolios-matrix.mjs   # (re)init the EMPTY 60-stream matrix skeleton (refuses if seeded)
-node scripts/merge-rebalances.mjs <emit…> # assemble per-config emit artifacts → portfolios.json (cron merge step)
+node scripts/init-portfolios-matrix.mjs   # (re)init the EMPTY 300-stream matrix skeleton (refuses if seeded)
+node scripts/add-kappa-streams.mjs        # additively add the κ>0 skeletons to a seeded portfolios.json
+node scripts/backseed-kappa.mjs           # one-shot: seed κ>0 history for existing effective dates
+node scripts/merge-rebalances.mjs <emit…> # assemble per-config emits → portfolios.json + κ-expand (cron merge step)
 ```
 
-**Forward-test matrix (optimizer side):** `portfolio-app/scripts/optimize.mjs` is BL-capable per run via flags — `--methodology pert|bl`, `--prior-mode cap|shrunk|equal`, `--tau <n>`, `--emit <file>` — and tags emitted stream ids `<base>@<configTag>`. The config **default is still legacy PERT** (`optimizer-config.json → factorConfig.useFactorModel:false`). Seed the full 10-config matrix locally with `portfolio-app/scripts/seed-forward-matrix.mjs` (sequential, resumable). See [FORWARD-TEST.md](FORWARD-TEST.md).
+**Forward-test matrix (optimizer side):** `portfolio-app/scripts/optimize.mjs` is BL-capable per run via flags — `--methodology pert|bl`, `--prior-mode cap|shrunk|equal`, `--tau <n>`, `--emit <file>` — and tags emitted (κ=0) stream ids `<base>@<configTag>`. The config **default is still legacy PERT** (`optimizer-config.json → factorConfig.useFactorModel:false`). Seed the full 10-config matrix locally with `portfolio-app/scripts/seed-forward-matrix.mjs` (sequential, resumable). The **κ axis** {0,0.1,0.25,0.5,0.75} is NOT an optimize.mjs flag — κ>0 streams (`-k<KK>`) are derived downstream by `merge-rebalances.mjs` as a post-hoc blend toward drift (mirrors the backtester's `blendTowardDrift`). See [FORWARD-TEST.md](FORWARD-TEST.md).
 
-**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** — `optimize.mjs --emit` per headline config → `merge-rebalances.mjs` → one PR), `refresh-backtest.yml` (weekly full backtest sweep — `npm run fetch && npm run backtest` → commits `backtest-results.json`).
+**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** over all 10 configs — `optimize.mjs --emit` per config → `merge-rebalances.mjs` appends κ=0 rows and κ-expands to 300 streams → **auto-commits to `main`**, no PR), `refresh-backtest.yml` (weekly full backtest sweep — `npm run fetch && npm run backtest` → commits `backtest-results.json`).
 
 **Ticker universe:** the investable list lives once in [`portfolio-app/data/universe.js`](portfolio-app/data/universe.js) (`UNIVERSE_JK`, `.JK` suffix) and is imported by all three fetch scripts. The dashboard fetch unions in any ticker still held in `portfolios.json` so removed names stay tracked; the optimizer/backtest use the canonical list. See the [`add-ticker`](.claude/skills/add-ticker/SKILL.md) skill.
 

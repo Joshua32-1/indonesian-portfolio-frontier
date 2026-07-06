@@ -26,6 +26,11 @@ Use read-only inspection and `node`/`jq`-style checks (via Bash) — do **not** 
   - Each rebalance's weights **sum to ≈ 1.00** (flag deviations > ~0.005).
   - Tickers are **bare** (`BBCA`), not `.JK`, and **every ticker exists** in the lean snapshot's assets.
   - `rebalances[]` sorted ascending by `effective`; no overwritten history; `inception`/`updated` present and sane.
+- **κ-axis contract (300-stream matrix = 10 configs × 6 variants × 5 κ):**
+  - Exactly **300 streams**; every stream has a `kappa` field ∈ {0,0.1,0.25,0.5,0.75} (absent ⇒ 0 on pre-κ streams).
+  - κ>0 ids carry the `-k<KK>` suffix (`KK = round(κ·100)`: k10/k25/k50/k75); κ=0 ids have no suffix; base is before `@`, suffix after.
+  - κ>0 weight maps also sum to ≈ 1.00 with bare tickers; each κ stream's **inception row equals its κ=0 sibling** (first-period identity — κ has no effect without a prior).
+  - κ>0 rows are **synthesized** by `merge-rebalances.mjs` (post-hoc blend), not hand-authored — flag hand edits to κ>0 streams.
 - **Cross-app parity:** the strategy ids/labels match what the dashboard expects; the union of tickers used across portfolios resolves to snapshot assets.
 
 ## Output

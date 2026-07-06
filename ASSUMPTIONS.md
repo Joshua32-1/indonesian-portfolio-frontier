@@ -51,7 +51,7 @@ The factor model (`useFactorModel`) is **off by default** (the optimizer-config 
 
   `maximize  Sharpe(avg μ) − λ · (tailGap / σ_ref) − κ · turnover`
 
-  where `tailGap = E[r] − CVaR₅%`, `σ_ref` normalizes λ across universes (equal-weight portfolio variance), and `κ = turnoverPenalty` (default 0, off).
+  where `tailGap = E[r] − CVaR₅%`, `σ_ref` normalizes λ across universes (equal-weight portfolio variance), and `κ = turnoverPenalty` (default 0, off). **This objective-integrated κ is distinct from the forward test's κ axis** — the latter is applied *post-hoc* (a blend of the κ=0 target toward the drifted prior, mirroring the backtester's `blendTowardDrift`), not inside this objective. See [FORWARD-TEST.md](FORWARD-TEST.md).
 - **CVaR at the 5% level.**
 - **Anti-overfit:** the optimizer hill-climbs on a **subsample of 1000 paths** (`ROBUST_SUBSAMPLE_SIZE`) drawn from the full 100k-path Monte Carlo bank; the full set is used only for reporting (the efficient-frontier cloud).
 - **Deterministic starts:** cap-corner + sector-corner + analytical seeds (no Dirichlet randoms), so re-running gives stable results.

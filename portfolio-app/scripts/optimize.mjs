@@ -179,6 +179,9 @@ function toWeightMap(weightArray) {
 
 // Composite ids tag each variant with its methodology config so the 6 variants land
 // on the matching `<base>@<configTag>` entries in portfolios.json (the matrix streams).
+// These are the κ=0 targets only; the κ>0 forward-test variants (`<base>@<configTag>-k<KK>`)
+// are derived downstream by live-dashboard-portfolio/scripts/merge-rebalances.mjs
+// (post-hoc blend toward drift), so optimize.mjs stays κ-agnostic.
 const variantWeights = {
   [`max-sharpe@${configTag}`]: result.consensusPortfolio?.weights,
   [`min-var@${configTag}`]:    result.minVariancePortfolio?.weights,
