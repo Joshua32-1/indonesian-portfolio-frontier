@@ -1,20 +1,22 @@
-name: Weekly Rebalance PR
+name: Weekly Rebalance
 
-# Re-runs the optimizer headlessly every Sunday and opens ONE PR with new
-# portfolios.json weights for human review, ready before Monday's market open.
-# Nothing reaches production until the PR is merged (which redeploys Vercel).
+# Re-runs the optimizer headlessly every Sunday and commits new portfolios.json
+# weights DIRECTLY to main (no PR), ready before Monday's market open — the push
+# redeploys Vercel automatically.
 #
 # Matrix design: the forward test tracks a methodology matrix (PERT + BL×prior×τ).
 # Each config runs as its own parallel job that writes ONLY its streams to an emit
 # artifact (`optimize.mjs --emit`), then a single merge job assembles them into
-# portfolios.json and opens the PR — so parallel jobs never clobber the shared file.
+# portfolios.json and pushes to main — so parallel jobs never clobber the shared file.
 #
-# COST: the weekly matrix is the HEADLINE subset (pert + BL cap × τ-sweep = 4 configs)
-# to stay within CI minutes. Re-seed the FULL 10-config matrix occasionally via the
-# local `scripts/seed-forward-matrix.mjs`, or extend `matrix.config` below + dispatch.
+# COST: the weekly matrix runs the FULL 10-config set (pert + BL × prior{cap,shrunk,equal}
+# × τ{0.01,0.03,0.10}). Each job emits only its 6 κ=0 target streams; the merge step then
+# κ-expands every stream into the 5-κ axis {0,0.1,0.25,0.5,0.75} → 300 streams. κ is a cheap
+# post-hoc blend (no extra optimizer runs), so cost scales with configs (10), not configs×κ.
 #
-# Requires repo setting: Settings → Actions → General → Workflow permissions →
-# "Allow GitHub Actions to create and approve pull requests".
+# GUARDRAIL: no human review gate — merge-rebalances.mjs FAILS the job (no push) if any
+# weight map doesn't sum to ~1 or references an unknown ticker/stream id, so malformed
+# weights never reach production. Review the auto-commit on main after the fact.
 
 on:
   schedule:
@@ -32,7 +34,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   optimize:
@@ -42,10 +43,16 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - { tag: pert,       methodology: pert, prior: '',    tau: '' }
-          - { tag: bl-cap-t01, methodology: bl,   prior: cap,   tau: '0.01' }
-          - { tag: bl-cap-t03, methodology: bl,   prior: cap,   tau: '0.03' }
-          - { tag: bl-cap-t10, methodology: bl,   prior: cap,   tau: '0.10' }
+          - { tag: pert,          methodology: pert, prior: '',      tau: '' }
+          - { tag: bl-cap-t01,    methodology: bl,   prior: cap,     tau: '0.01' }
+          - { tag: bl-cap-t03,    methodology: bl,   prior: cap,     tau: '0.03' }
+          - { tag: bl-cap-t10,    methodology: bl,   prior: cap,     tau: '0.10' }
+          - { tag: bl-shrunk-t01, methodology: bl,   prior: shrunk,  tau: '0.01' }
+          - { tag: bl-shrunk-t03, methodology: bl,   prior: shrunk,  tau: '0.03' }
+          - { tag: bl-shrunk-t10, methodology: bl,   prior: shrunk,  tau: '0.10' }
+          - { tag: bl-equal-t01,  methodology: bl,   prior: equal,   tau: '0.01' }
+          - { tag: bl-equal-t03,  methodology: bl,   prior: equal,   tau: '0.03' }
+          - { tag: bl-equal-t10,  methodology: bl,   prior: equal,   tau: '0.10' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -95,25 +102,17 @@ jobs:
           path: emit
           pattern: weights-*
           merge-multiple: true
-      - name: Merge emit artifacts → portfolios.json
+      - name: Merge emit artifacts → portfolios.json (+ κ-expand)
         run: node live-dashboard-portfolio/scripts/merge-rebalances.mjs emit/*.json
-      - name: Open pull request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          add-paths: live-dashboard-portfolio/data/portfolios.json
-          branch: auto/weekly-rebalance
-          delete-branch: true
-          commit-message: 'chore: weekly rebalance weights (methodology matrix)'
-          title: 'Weekly rebalance — review new weights'
-          body: |
-            Automated weekly rebalance — methodology matrix (PERT + BL cap×τ headline subset),
-            produced by `portfolio-app/scripts/optimize.mjs --emit` + `merge-rebalances.mjs`.
-
-            **Review before merging:**
-            - Check the per-stream weight diff (ids `<base>@<configTag>`).
-            - Each stream's weights sum to ~1.00 (enforced by the merge script).
-            - Merging redeploys the Vercel dashboard with the new `effective` weights.
-
-            See [`FORWARD-TEST.md`](../blob/main/FORWARD-TEST.md) for the protocol.
-
-            🤖 Generated with [Claude Code](https://claude.com/claude-code)
+      - name: Commit & push weights to main
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- live-dashboard-portfolio/data/portfolios.json; then
+            echo "No weight changes — nothing to push."; exit 0
+          fi
+          # Rebase onto latest main in case daily snapshot commits landed since checkout.
+          git pull --rebase --autostash origin main
+          git add live-dashboard-portfolio/data/portfolios.json
+          git commit -m "chore: weekly rebalance weights (methodology matrix × κ, run ${GITHUB_RUN_ID})"
+          git push origin HEAD:main

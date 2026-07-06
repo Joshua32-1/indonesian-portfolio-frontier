@@ -49,7 +49,7 @@ When changing a formula, constant, or default, also:
 
 Weights reach `portfolios.json` one of two ways:
 
-`portfolios.json` is a **methodology matrix** of 60 streams (`<base>@<configTag>`); weights reach it one of two ways:
+`portfolios.json` is a **methodology matrix × κ** of 300 streams (`<base>@<configTag>` for κ=0, `-k<KK>` suffix for κ>0); weights reach it one of two ways:
 
 **Manual:**
 1. In `portfolio-app`, click **REGENERATE** and read the chosen weights off the **Analytics** tab.
@@ -57,7 +57,7 @@ Weights reach `portfolios.json` one of two ways:
 3. Verify the weights sum to ≈ 1.00 and every ticker exists in the snapshot.
 4. Bump `"updated"`, commit, and push → Vercel auto-redeploys.
 
-**Automated:** the `weekly-rebalance.yml` Action runs a **parallel config matrix** — each `portfolio-app/scripts/optimize.mjs --emit` job (same `src/math/` engine, no UI) writes only its config's streams to an artifact, then a merge job runs `live-dashboard-portfolio/scripts/merge-rebalances.mjs` to append every stream's dated row into `portfolios.json` and opens one PR. Separately, `refresh-views.yml` archives point-in-time analyst views weekly into `portfolio-app/data/view-history/` for later κ-replay.
+**Automated:** the `weekly-rebalance.yml` Action runs a **parallel config matrix** (all 10 configs) — each `portfolio-app/scripts/optimize.mjs --emit` job (same `src/math/` engine, no UI) writes only its config's 6 κ=0 streams to an artifact, then a merge job runs `live-dashboard-portfolio/scripts/merge-rebalances.mjs` to append every κ=0 stream's dated row **and synthesize the κ>0 variants** (post-hoc blend toward drift) into `portfolios.json`, then **commits directly to `main`** (no PR; the merge script fails the job if any weights are malformed, so bad data never pushes). Note: the **live** κ-sweep is this cheap post-hoc blend on stored κ=0 weights; separately, `refresh-views.yml` archives point-in-time analyst views weekly into `portfolio-app/data/view-history/` enabling a higher-fidelity κ-**replay** (re-optimize from archived inputs) — the two don't conflict.
 
 ## Commits
 

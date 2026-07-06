@@ -21,7 +21,7 @@ Quant and IDX terms used across this repo. Each entry: a one-line definition and
 - **`.JK`** — Yahoo suffix for IDX-listed tickers (`BBCA.JK`). The dashboard/`portfolios.json` use the bare symbol (`BBCA`).
 - **Ledoit-Wolf shrinkage** — pulls the sample covariance toward a scaled identity to reduce estimation noise; on by default. → `ledoitWolfShrinkage`.
 - **Liquidity penalty ramp** — diagonal inflation `0.9·(1 − e^(−7.5·stress))` raising the apparent risk of thinly-traded names. → `LIQ_PENALTY_CAP`, `LIQ_PENALTY_K`.
-- **Methodology matrix** — the forward test's 60 live streams = 10 configs × 6 variants. Config = `pert` (legacy PERT) + BL × prior{cap,shrunk,equal} × τ{0.01,0.03,0.10}; stream id = `<base>@<configTag>`. → `portfolios.json`, [FORWARD-TEST.md](FORWARD-TEST.md).
+- **Methodology matrix** — the forward test's 300 live streams = 10 configs × 6 variants × 5 κ. Config = `pert` (legacy PERT) + BL × prior{cap,shrunk,equal} × τ{0.01,0.03,0.10}; κ = turnover penalty {0,0.1,0.25,0.5,0.75}; stream id = `<base>@<configTag>` (κ=0) or `<base>@<configTag>-k<KK>` (κ>0). → `portfolios.json`, [FORWARD-TEST.md](FORWARD-TEST.md).
 - **Min-variance portfolio (◆)** — lowest portfolio variance subject to constraints. → `monteCarlo.js`.
 - **Monte Carlo** — repeated random sampling of return scenarios (default 100k paths) to evaluate portfolios. → `runMonteCarloSimulation`.
 - **Omega (Ω)** — BL view-uncertainty matrix (diagonal); larger Ω = less trust in analyst views. `omegaScale` is hardcoded at 0.05. → `computeViewUncertainty`.
@@ -35,4 +35,4 @@ Quant and IDX terms used across this repo. Each entry: a one-line definition and
 - **Tail penalty (λ)** — weight on tail risk in the objective; default 0.10. Higher λ = more downside-averse. → `DEFAULT_TAIL_PENALTY`.
 - **Tau (τ)** — BL prior-anchor strength; default 0.03 (low τ trusts the cap-weight equilibrium). → `factorConfig.js`.
 - **Theta-decay** — exponential time-weighting of returns (half-life 63 trading days) so recent data dominates the vol estimate. → `thetaDecayWeight`.
-- **Turnover (κ)** — one-way trade volume between current and target weights; optional cost in the objective (default off). → `computeTurnover`.
+- **Turnover (κ)** — one-way trade volume between current and target weights. Two uses: (1) an optional cost in the *optimizer's* objective (default off), and (2) the forward test's 5th matrix axis {0,0.1,0.25,0.5,0.75}, realized **post-hoc** by blending each stream's κ=0 target toward its own drifted prior (mirrors the backtester's `blendTowardDrift`). → `computeTurnover`, `live-dashboard-portfolio/scripts/lib/kappaExpand.mjs`.

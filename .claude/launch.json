@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev", "--prefix", "backtest-portfolio"],
       "port": 5174,
       "autoPort": false
+    },
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "live-dashboard-portfolio", "--", "--port", "5175", "--strictPort"],
+      "port": 5175,
+      "autoPort": false
     }
   ]
 }

@@ -63,6 +63,13 @@ const TAUS = [
   { id: 0.03, label: 'τ=0.03' },
   { id: 0.1,  label: 'τ=0.10' },
 ];
+const KAPPAS = [
+  { id: 0,    label: 'κ=0 (full)' },
+  { id: 0.1,  label: 'κ=0.10' },
+  { id: 0.25, label: 'κ=0.25' },
+  { id: 0.5,  label: 'κ=0.50' },
+  { id: 0.75, label: 'κ=0.75' },
+];
 
 /** Strategy base id from a portfolio entry (explicit `base`, else strip `@prior`). */
 const baseOf = (p) => p.base ?? String(p.id).split('@')[0];
@@ -257,6 +264,7 @@ export default function App() {
   const [methodology, setMethodology] = useState('bl'); // 'bl' | 'pert'
   const [prior, setPrior]         = useState('cap');
   const [tau, setTau]             = useState(0.03);
+  const [kappa, setKappa]         = useState(0);
   const [frequency, setFrequency] = useState('weekly');
   const [costBasis, setCostBasis] = useState('gross'); // 'gross' | 'net'
   const net = costBasis === 'net';
@@ -292,13 +300,15 @@ export default function App() {
     const all          = portfoliosData.portfolios ?? [];
     const riskFreeRate = portfoliosData.riskFreeRate ?? 0.0575;
 
-    // Slice = the 6 variants for the selected methodology config. PERT ignores prior/τ;
-    // BL slices by (prior, τ). Falls back to "all" for a flat legacy schema (no methodology field).
+    // Slice = the 6 variants for the selected methodology config at the selected κ.
+    // PERT ignores prior/τ; BL slices by (prior, τ); both slice by κ (missing κ ⇒ 0).
+    // Falls back to "all" for a flat legacy schema (no methodology field).
     const hasMatrix = all.some(p => p.methodology != null);
+    const kEq = p => (p.kappa ?? 0) === kappa;
     const portfolios = !hasMatrix ? all
       : methodology === 'pert'
-        ? all.filter(p => p.methodology === 'pert')
-        : all.filter(p => p.methodology === 'bl' && p.prior === prior && p.tau === tau);
+        ? all.filter(p => p.methodology === 'pert' && kEq(p))
+        : all.filter(p => p.methodology === 'bl' && p.prior === prior && p.tau === tau && kEq(p));
 
     const opts = { frequency, net };
 
@@ -374,7 +384,7 @@ export default function App() {
     )].sort((a, b) => (a < b ? 1 : -1));
 
     return { chartRows, metrics, portfolios, allTickers, rebalanceDates };
-  }, [snapshot, portfoliosData, methodology, prior, tau, frequency, net]);
+  }, [snapshot, portfoliosData, methodology, prior, tau, kappa, frequency, net]);
 
   // Date-aware weight rows: weights active on the selected rebalance date (default latest)
   const activeWeightDate = weightDate ?? rebalanceDates?.[0] ?? null;
@@ -447,7 +457,8 @@ export default function App() {
     : '—';
   const priorLabel = PRIORS.find(x => x.id === prior)?.label ?? prior;
   const freqLabel  = FREQS.find(x => x.id === frequency)?.label ?? frequency;
-  const configLabel = methodology === 'pert' ? 'Legacy PERT' : `BL · ${priorLabel} · τ=${tau.toFixed(2)}`;
+  const configLabel = (methodology === 'pert' ? 'Legacy PERT' : `BL · ${priorLabel} · τ=${tau.toFixed(2)}`)
+    + ` · κ=${kappa.toFixed(2)}`;
 
   return (
     <div style={s.root}>
@@ -494,6 +505,12 @@ export default function App() {
               </select>
             </label>
           )}
+          <label style={s.selectLabel}>
+            Turnover κ
+            <select style={s.select} value={kappa} onChange={e => setKappa(Number(e.target.value))}>
+              {KAPPAS.map(k => <option key={k.id} value={k.id}>{k.label}</option>)}
+            </select>
+          </label>
           <label style={s.selectLabel}>
             Frequency
             <select style={s.select} value={frequency} onChange={e => setFrequency(e.target.value)}>
