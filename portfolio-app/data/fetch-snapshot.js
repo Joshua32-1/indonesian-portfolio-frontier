@@ -14,7 +14,7 @@
  */
 
 import YahooFinance from 'yahoo-finance2'; // v3 — capitalised class import
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import {
@@ -353,8 +353,10 @@ async function buildSnapshot() {
   // non-reconstructible input a future full-strategy (analyst-view) walk-forward needs
   // — prices for any past date come from backtest-history.json, so we store only the
   // views + the slowly-varying fundamentals (caps, dividend yield, rf), ~5–10 KB.
-  // Keyed by the snapshot's weekly-data end date, so multiple fetches in a week
-  // overwrite → exactly one file per week.
+  // Keyed by the snapshot's weekly-data end date — exactly one file per week.
+  // Write-once: a later fetch in the same week must NOT replace the earlier
+  // capture, or the archived views drift toward newer analyst targets and
+  // contaminate a future κ-replay with look-ahead.
   const viewSnapshot = {
     asOf:         weeklyEnd || new Date().toISOString().slice(0, 10),
     generated:    snapshot.generated,
@@ -371,8 +373,12 @@ async function buildSnapshot() {
   const viewDir = join(__dirname, 'view-history');
   mkdirSync(viewDir, { recursive: true });
   const viewPath = join(viewDir, `views-${viewSnapshot.asOf}.json`);
-  writeFileSync(viewPath, JSON.stringify(viewSnapshot));
-  console.log(`🗄️   Captured point-in-time analyst views → ${viewPath}\n`);
+  if (existsSync(viewPath)) {
+    console.log(`🗄️   View capture for ${viewSnapshot.asOf} already exists — keeping the earlier point-in-time capture\n`);
+  } else {
+    writeFileSync(viewPath, JSON.stringify(viewSnapshot));
+    console.log(`🗄️   Captured point-in-time analyst views → ${viewPath}\n`);
+  }
 }
 
 buildSnapshot().catch(err => {

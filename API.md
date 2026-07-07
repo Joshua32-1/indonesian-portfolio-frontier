@@ -118,7 +118,7 @@ It holds a **methodology matrix × κ**: **300 streams = 10 configs × 6 strateg
 
 ## 3a. `view-history/` — point-in-time analyst views (for κ-replay)
 
-Path: `portfolio-app/data/view-history/views-YYYY-MM-DD.json`. Written automatically by `fetch-snapshot` (locally on `npm run dev`, and weekly by the `Capture Analyst Views` GitHub Action), keyed by the snapshot's weekly-data end date — **one file per week**.
+Path: `portfolio-app/data/view-history/views-YYYY-MM-DD.json`. Written automatically by `fetch-snapshot` (locally on `npm run dev`, and weekly by the `Capture Analyst Views` GitHub Action), keyed by the snapshot's weekly-data end date — **one file per week, write-once**: if the file for that week already exists, `fetch-snapshot` keeps it and skips the write. A later fetch in the same week must not replace the earlier capture — that would silently pull in newer analyst targets and contaminate a future κ-replay with look-ahead.
 
 **Why:** the optimizer's weights depend on inputs that, except for prices, are *not reconstructible after the fact* — chiefly the analyst price targets (`forwardEstimates`), plus slowly-varying caps / dividend yield / BI-rate. Prices for any past date come from [`backtest-portfolio/public/backtest-history.json`](backtest-portfolio/public/backtest-history.json), so we archive only the non-reconstructible bits. This is the data a future **κ-replay** (or λ-replay) of the *live, signal-driven* strategy needs — recompute Σ from prices, μ/views + caps + rf from the weekly capture, and re-run the optimizer (`optimizeTailAware`/`walkVariant`) at any turnover penalty.
 
