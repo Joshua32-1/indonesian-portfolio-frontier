@@ -2,7 +2,7 @@
 
 A Monte Carlo portfolio optimizer for Indonesian large-cap equities. It pulls live market data from Yahoo Finance, samples analyst price-target distributions to build return scenarios, optionally blends them with Black-Litterman equilibrium views, and finds the allocation that maximizes a tail-aware Sharpe ratio under your sector and position constraints.
 
-> **IDX context.** The default universe is ~25 `.JK` tickers covering the most liquid names on Bursa Efek Indonesia. Analyst 12-month price targets on IDX stocks average roughly 50 percentage points above the cap-weight equilibrium implied return — structural sell-side optimism that the Black-Litterman prior is specifically designed to counteract. The risk-free rate is live-fetched from the Bank Indonesia BI-Rate (5.75% as of mid-2026), with a hardcoded fallback in [`data/fetch-snapshot.js`](data/fetch-snapshot.js) if the fetch fails. Both the universe and the fallback rate are editable there.
+> **IDX context.** The default universe is ~25 `.JK` tickers covering the most liquid names on Bursa Efek Indonesia. Analyst 12-month price targets on IDX stocks average roughly 50 percentage points above the cap-weight equilibrium implied return — structural sell-side optimism that the Black-Litterman prior is specifically designed to counteract. The risk-free rate is live-fetched from the Bank Indonesia BI-Rate (5.75% as of mid-2026), with a hardcoded fallback in [`data/fetch-snapshot.js`](data/fetch-snapshot.js) if the fetch fails. The fallback rate is editable there; the universe lives in [`data/universe.js`](data/universe.js).
 
 For recommended slider settings by universe type and risk posture, see [CALIBRATION.md](CALIBRATION.md). This document covers how each layer works; CALIBRATION.md covers what to set.
 
@@ -26,7 +26,7 @@ For recommended slider settings by universe type and risk posture, see [CALIBRAT
 
 ## Quick Start
 
-**Prerequisites:** Node 18+, npm.
+**Prerequisites:** Node 20 (matches CI), npm.
 
 ```bash
 npm install
@@ -127,9 +127,9 @@ The snapshot is a single JSON file that captures everything the optimizer needs:
 
 ### What gets fetched
 
-For each ticker in the `TICKERS` array (25 IDX symbols by default, all suffixed `.JK`):
+For each ticker in the universe ([`data/universe.js`](data/universe.js), 25 IDX symbols by default, queried with the `.JK` suffix):
 
-- **Weekly adjusted-close prices** via `historical({ period1: '2011-01-01', period2: lastCompletedFriday, interval: '1wk' })`. The end date is capped at the last completed Friday to exclude Yahoo's in-progress weekly bar, which carries unstable adjusted-close values.
+- **Weekly adjusted-close prices** via `chart({ period1: '2011-01-01', interval: '1wk' })` — `chart()` is used deliberately because `historical()` throws on partial-null rows. The result is then post-filtered (`throughDate`) to the last completed Friday to exclude Yahoo's in-progress weekly bar, which carries unstable adjusted-close values.
 - **Daily close prices** covering ~400 calendar days (≥252 trading days), used for volatility computation.
 - **`quoteSummary`** modules: `financialData` (analyst targets, dividend yield), `summaryDetail` (market cap), `defaultKeyStatistics` (float shares), `assetProfile` + `summaryProfile` (industry label, ADT proxies).
 
@@ -159,7 +159,7 @@ The IHSG benchmark (`^JKSE`) weekly history is also fetched and stored separatel
 
 ### Operational notes
 
-- To change the universe, edit the `TICKERS` array at the top of `fetch-snapshot.js` and re-run `npm run fetch-snapshot`.
+- To change the universe, edit `UNIVERSE_JK` in [`data/universe.js`](data/universe.js) (shared by all three apps' fetch scripts) and re-run `npm run fetch-snapshot`.
 - `refresh-sectors.js` re-fetches only the `assetProfile`/`summaryProfile` modules and updates industry labels without touching price or analyst data. Use it when sector classifications drift without a price refresh.
 - Sector label resolution — including fallback logic for tickers Yahoo misclassifies — lives in [`src/math/assetSector.js`](src/math/assetSector.js).
 
@@ -250,7 +250,7 @@ Once per-asset annualized volatilities σ_i are resolved and the Pearson correla
 
 Two optional augmentation layers can modify Σ before it reaches the optimizer:
 
-**Ledoit-Wolf shrinkage.** When the number of correlation observations is small relative to the number of assets (a common situation when the newest listing limits the window), the sample correlation matrix is noisy and can have near-zero or negative eigenvalues that destabilize optimization. Ledoit-Wolf shrinkage blends the sample Σ toward a scaled identity matrix, improving conditioning. This is enabled by default via `simConfig.shrinkage = true` and applies only when `nObs > n`.
+**Covariance shrinkage.** When the number of correlation observations is small relative to the number of assets (a common situation when the newest listing limits the window), the sample correlation matrix is noisy and can have near-zero or negative eigenvalues that destabilize optimization. The shrinkage step blends the sample Σ toward a scaled identity matrix with a heuristic data-driven intensity α ∈ [0,1] (a convex combination, so the result stays symmetric PSD), improving conditioning. The function is named `ledoitWolfShrinkage` for historical reasons, but the intensity formula is *not* the formal Ledoit-Wolf estimator (which needs the raw observation vectors). Enabled by default via `simConfig.shrinkage = true`; applies only when `nObs > n`.
 
 **Liquidity diagonal inflation.** When the factor model is active and `portfolioSize > 0` (AUM is set), the diagonal entries of Σ are inflated for illiquid assets:
 
@@ -584,7 +584,7 @@ The WORKSPACE tab is where you configure everything before running the simulatio
 | Chart subsample | 2,500 | `CHART_MAX_POINTS` | Fixed; max Recharts points |
 | Tail penalty λ | 0.10 | `DEFAULT_TAIL_PENALTY` | `tailAware` mode default |
 | Turnover penalty κ | 0 | `DEFAULT_SIM_CONFIG` | Off by default |
-| Shrinkage | ON | `DEFAULT_SIM_CONFIG` | Ledoit-Wolf |
+| Shrinkage | ON | `DEFAULT_SIM_CONFIG` | Heuristic scaled-identity (see Part III) |
 | `useFactorModel` | OFF | `DEFAULT_FACTOR_CONFIG` | Master BL toggle |
 | `tau` | 0.030 | `DEFAULT_FACTOR_CONFIG` | IDX conservative default |
 | `omegaScale` | 0.05 | `DEFAULT_FACTOR_CONFIG` | Hardcoded; IDX-calibrated |
@@ -599,13 +599,19 @@ The WORKSPACE tab is where you configure everything before running the simulatio
 
 ```
 portfolio-app/
+├── optimizer-config.json        Headless-run defaults (methodology, factorConfig, MC iterations)
+│
 ├── data/
+│   ├── universe.js              Canonical ticker universe (UNIVERSE_JK) — shared by all 3 apps
 │   ├── fetch-snapshot.js        Yahoo Finance fetch; writes live-market-snapshot.json
 │   ├── refresh-sectors.js       Lightweight sector/label refresh (no price re-fetch)
+│   ├── view-history/            Weekly point-in-time analyst-view captures (for κ-replay)
 │   └── live-market-snapshot.json  Runtime data (git-ignored or rebuilt on dev/build)
 │
 ├── scripts/
-│   └── validate-factors.mjs    Math regression suite; run after changing math modules
+│   ├── validate-factors.mjs    Math regression suite; run after changing math modules
+│   ├── optimize.mjs             Headless optimizer (weekly rebalance; --methodology/--prior-mode/--tau/--emit)
+│   └── seed-forward-matrix.mjs  Sequential, resumable 10-config matrix seeder
 │
 └── src/
     ├── App.jsx                  Four-tab UI orchestration; simulation state machine

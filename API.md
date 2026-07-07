@@ -17,7 +17,7 @@ Served as a static asset. In `portfolio-app`, Vite's `publicDir: 'data'` exposes
 | Variant | Path | Size | Interval | Built by |
 |---------|------|------|----------|----------|
 | Rich (optimizer) | `portfolio-app/data/live-market-snapshot.json` | ~1 MB | weekly history (2011→) + 252-day daily returns | `data/fetch-snapshot.js` |
-| Lean (dashboard) | `live-dashboard-portfolio/data/live-market-snapshot.json` | ~14 KB | daily adjusted closes, recent ~400 calendar days | `scripts/fetch-daily-snapshot.mjs` (CI) |
+| Lean (dashboard) | `live-dashboard-portfolio/data/live-market-snapshot.json` | ~14 KB | daily adjusted closes since the tracker's inception (`portfolios.json → inception`, 2026-06-30) | `scripts/fetch-daily-snapshot.mjs` (CI) |
 
 ### Rich schema (optimizer)
 
@@ -36,7 +36,7 @@ Served as a static asset. In `portfolio-app`, Vite's `publicDir: 'data'` exposes
 
   "assets": [
     {
-      "ticker": "BBCA.JK",                     // Yahoo symbol (.JK suffix)
+      "ticker": "BBCA",                        // bare symbol (the .JK suffix is used only for the Yahoo query)
       "name": "Bank Central Asia",
       "sector": "Banks",                       // Yahoo industry label (finer than GICS)
       "meta": {
@@ -60,7 +60,7 @@ Served as a static asset. In `portfolio-app`, Vite's `publicDir: 'data'` exposes
       },
       "priceHistory": { "interval": "1wk", "dates": [...], "adjClose": [...] }
     }
-    // ... one entry per ticker in the TICKERS list
+    // ... one entry per ticker in the universe (portfolio-app/data/universe.js)
   ]
 }
 ```
@@ -183,7 +183,7 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 | `thetaDecayWeight(ageDays, halfLifeDays)` | `0.5^(age/halfLife)` |
 | `computeThetaDecayedVol(dailyReturns, halfLifeDays?)` | Theta-decayed daily σ (default half-life 63; fallback 1.5%) |
 | `resolveDailyVol(asset, halfLifeDays?)` | Computed vol, else snapshot value |
-| `ledoitWolfShrinkage(S, nObs)` | Analytical shrinkage toward scaled identity |
+| `ledoitWolfShrinkage(S, nObs)` | Heuristic shrinkage toward scaled identity (data-driven intensity α ∈ [0,1]; not the formal Ledoit-Wolf estimator — see [ASSUMPTIONS.md](ASSUMPTIONS.md)) |
 | `computeCovarianceMatrix(corrMatrix, assets, { volHalfLife, shrinkage, nObs })` | Σ from ρ and annualized σ → `{ covMatrix, ... }` |
 | `augmentCovarianceMatrix(covMatrix, perAssetFactors, factorConfig)` | Adds liquidity penalty to Σ diagonal |
 | `empiricalQuantile(sorted, p)` | Hyndman-Fan type 7 quantile |
@@ -197,7 +197,7 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 | Function | Purpose |
 |----------|---------|
 | `buildScenarioBank({ assets, iterations, factorConfig, covMatrix, riskFreeRate, priorMode='cap', ... })` | N Monte Carlo analyst-return vectors; applies BL blend if enabled, with the equilibrium prior transformed by `applyPriorMode(priorMode)` |
-| `runMonteCarloSimulation({ assets, covMatrix, riskFreeRate, iterations, factorConfig, robustMode, tailPenalty, priorMode='cap', ... })` | **Main entry.** Returns the 4 labeled portfolios (robust ★, oracle ▲, min-var ◆, consensus ◎), efficient-frontier cloud, λ frontier, stress + benchmark metrics. `priorMode` forwards to `buildScenarioBank` |
+| `runMonteCarloSimulation({ assets, covMatrix, riskFreeRate, iterations, factorConfig, robustMode, tailPenalty, priorMode='cap', ... })` | **Main entry.** Returns the 4 labeled portfolios (robust ★, oracle ▲, min-var ◆, consensus ◎), efficient-frontier cloud, λ frontier, and stress results (`portfolios`, `frontierPoints`, `stressResults`, `meta`). Benchmark metrics come from `computeBenchmarkMetrics`, called separately by the UI. `priorMode` forwards to `buildScenarioBank` |
 | `evaluateStressScenarios(assets, weights)` | Stress tests on analyst extremes / shocks |
 
 ### `blackLitterman.js` — posterior returns with analyst views
@@ -211,7 +211,7 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 | `blackLittermanPosterior({ pi, Q, omega, covMatrix, tau })` | Posterior μ_BL |
 | `buildBlackLittermanContext({ ... })` | Pre-compute π, Ω for a run |
 | `computePosteriorReturns(Q, covMatrix, blContext)` | μ_BL from views Q given a prebuilt context |
-| `shouldUseBlackLitterman(factorConfig)` | `useBlackLitterman && useCapPrior && useAnalystViews` |
+| `shouldUseBlackLitterman(factorConfig)` | `isFactorModelActive(factorConfig) && factorConfig.useBlackLitterman !== false` (`useAnalystViews` is handled inside `buildBlackLittermanContext`) |
 
 ### `qualityFactors.js` — factor scores & liquidity
 
@@ -237,13 +237,14 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 
 | Function | Purpose |
 |----------|---------|
-| `drawCorrelatedShocks(choleskyL, nPaths)` | Cholesky-based correlated shocks (reused across λ sweep) |
+| `makeRng(seed)` | Seeded mulberry32 RNG (used by the backtester for reproducible draws) |
+| `drawCorrelatedShocks(choleskyL, nPaths, rng = Math.random)` | Cholesky-based correlated shocks (reused across λ sweep) |
 | `pickEvenlySpacedIndices(total, count)` | Deterministic subsampling |
 | `covDiag(covMatrix)` | Diagonal (per-asset variance) |
 | `realizedSimpleReturn(mu, shock, varDiag)` | Lognormal 1-yr return with Ito correction |
 | `computeRealizedPortfolioReturns(weights, scenarios, shockMatrix, sigDiag)` | Portfolio returns across paths |
 | `computeTailMetrics(returns, riskFreeRate)` | CVaR₅%, tail gap, P(below r_f) |
-| `buildObjectiveFn({ mode, subsampleScenarios, avgMeans, covMatrix, rf, lambda, ... })` | Objective for the optimizer |
+| `buildObjectiveFn({ mode, subsampleScenarios, avgMeans, covMatrix, riskFreeRate, tailPenalty, sigmaRef, currentWeights, turnoverPenalty, realizationShocks })` | Objective for the optimizer |
 | `computeTurnover(wTarget, wCurrent)` | One-way turnover |
 | `buildRebalanceTrades(assets, targetWeights, currentWeights)` | Current vs. proposed trades |
 
@@ -270,12 +271,17 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 | Function (`portfolioIndex.js`) | Purpose |
 |--------------------------------|---------|
 | `weightsAtDate(rebalances, barDate)` | Active weight set on/before a date |
-| `buildTrackerSeries(portfolio, assets, benchmarkHistory, inception)` | Stitched index series (base 100), compounds continuously |
+| `buildTrackerSeries(portfolio, assets, benchmarkHistory, inception, opts = {})` | Stitched index series (base 100), compounds continuously |
 | `buildIHSGSeries(benchmarkHistory, inception)` | IHSG index series (base 100) |
 | `mergeChartRows(allSeries)` | Merge into Recharts row format |
 | `sinceInceptionReturn(series)` | Decimal return since inception |
 | `latestRebalanceDate(rebalances)` / `latestWeights(portfolio)` | Latest entry helpers |
+| `extractDailyReturns(series)` | Daily log-returns from an index series |
+| `calcAnnualizedReturn(series, dpy=252)` / `calcAnnualizedVol(dailyLogReturns, dpy=252)` | Annualized return / volatility |
+| `calcMaxDrawdown(series)` | Max peak-to-trough drawdown |
+| `calcSharpe(annReturn, annVol, riskFreeRate)` | Sharpe from annualized inputs |
+| `calcTrackingError(portfolioLogReturns, benchmarkLogReturns, dpy=252)` / `calcInfoRatio(annualizedExcessReturn, trackingError)` | Forward-test metrics vs IHSG |
 
-`priceAlign.js` provides `alignPriceSeries` (date alignment) used by the above.
+`priceAlign.js` provides `alignPriceSeries` (date alignment) used by the above. `attribution.js` provides `buildLiveAttribution(portfolio, assets, inception)` — per-holding contribution since inception.
 
 `transactionCosts.js` provides the **derived net-of-cost** model — a standalone copy of the backtester's cost primitives (`COST` constants, `halfSpreadBps(advIDR)`, trailing-63 ADV from the snapshot's `dollarVol`). The dashboard applies it in-browser when the Cost selector is "Net"; gross/net and rebalance frequency are **derived, not stored**.

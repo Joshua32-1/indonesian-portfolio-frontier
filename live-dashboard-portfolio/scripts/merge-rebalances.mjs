@@ -5,7 +5,7 @@
  * Used by the weekly-rebalance matrix workflow: each parallel job runs
  * `optimize.mjs --emit weights-<tag>.json` (writes its config's streams WITHOUT
  * touching the shared portfolios.json), then this merge step appends every
- * stream's dated rebalance row in one shot → one PR.
+ * stream's dated rebalance row in one shot → one auto-commit to main (no PR).
  *
  * Emit-artifact shape (the contract with optimize.mjs --emit):
  *   { "effective": "YYYY-MM-DD",

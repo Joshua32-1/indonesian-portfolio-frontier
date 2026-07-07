@@ -37,13 +37,13 @@ The factor model (`useFactorModel`) is **off by default** (the optimizer-config 
 - **Equilibrium prior is selectable** (`applyPriorMode`, default `cap`): `cap` = market-cap equilibrium (identity, unchanged), `equal` = 1/n, `shrunk` = 0.5·cap + 0.5·equal. The matrix sweeps all three (`--prior-mode`).
 - **`omegaScale = 0.05`** is **hardcoded, not a UI slider.** The academic RMSE-implied value (~0.61) would effectively ignore analyst views entirely; 0.05 is the practical BL convention that keeps meaningful per-stock signal. It yields ~48% shrinkage for a heavily-covered large-cap (BBCA, 24 analysts) and ~83% for a thin speculative name.
 - Per-stock differentiation comes from `analystConfidence` (0.7) and `dispersionOmega` (0.8), not from `omegaScale`.
-- `largeCapBias = 0.25` tilts the equilibrium toward larger names.
+- `largeCapBias = 0.25` sets the cap-weight exponent `1 − 2·bias` (0.5 at the default) — **raising it flattens** the equilibrium away from mega-caps toward smaller names (0 = pure cap-weight, 0.5 = equal-weight).
 
 ## Volatility
 
 - **Theta-decayed** daily volatility: exponential weighting with **half-life 63 trading days** (~1 quarter), recomputed from `meta.dailyReturns`. UI exposes the half-life as a slider.
 - **Fallback 1.5% daily** when history is too short (`FALLBACK_DAILY_VOL`).
-- **Ledoit-Wolf shrinkage** is **on by default** — Σ is shrunk toward a scaled identity to stabilize the optimization.
+- **Covariance shrinkage** is **on by default** — Σ is shrunk toward a scaled identity with a **heuristic data-driven intensity** α ∈ [0,1] (≈0.2 on the live universe). The function is named `ledoitWolfShrinkage` for historical reasons but is *not* the formal Ledoit-Wolf estimator; it is a convex combination, so the shrunk Σ stays symmetric PSD.
 
 ## Robust objective
 
@@ -51,7 +51,7 @@ The factor model (`useFactorModel`) is **off by default** (the optimizer-config 
 
   `maximize  Sharpe(avg μ) − λ · (tailGap / σ_ref) − κ · turnover`
 
-  where `tailGap = E[r] − CVaR₅%`, `σ_ref` normalizes λ across universes (equal-weight portfolio variance), and `κ = turnoverPenalty` (default 0, off). **This objective-integrated κ is distinct from the forward test's κ axis** — the latter is applied *post-hoc* (a blend of the κ=0 target toward the drifted prior, mirroring the backtester's `blendTowardDrift`), not inside this objective. See [FORWARD-TEST.md](FORWARD-TEST.md).
+  where `tailGap = E[r] − CVaR₅%`, `σ_ref` normalizes λ across universes (equal-weight portfolio standard deviation), and `κ = turnoverPenalty` (default 0, off). **This objective-integrated κ is distinct from the forward test's κ axis** — the latter is applied *post-hoc* (a blend of the κ=0 target toward the drifted prior, mirroring the backtester's `blendTowardDrift`), not inside this objective. See [FORWARD-TEST.md](FORWARD-TEST.md).
 - **CVaR at the 5% level.**
 - **Anti-overfit:** the optimizer hill-climbs on a **subsample of 1000 paths** (`ROBUST_SUBSAMPLE_SIZE`) drawn from the full 100k-path Monte Carlo bank; the full set is used only for reporting (the efficient-frontier cloud).
 - **Deterministic starts:** cap-corner + sector-corner + analytical seeds (no Dirichlet randoms), so re-running gives stable results.

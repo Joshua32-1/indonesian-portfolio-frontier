@@ -1,6 +1,6 @@
 ---
 name: add-ticker
-description: Add or remove an IDX ticker consistently across the optimizer's TICKERS list, the regenerated snapshot, and downstream sector/position-cap defaults. Use when changing the investable universe. Keeps the optimizer and dashboard ticker namespaces consistent.
+description: Add or remove an IDX ticker consistently across the shared UNIVERSE_JK list (portfolio-app/data/universe.js), the regenerated snapshot, and downstream sector/position-cap defaults. Use when changing the investable universe. Keeps the optimizer and dashboard ticker namespaces consistent.
 ---
 
 # Add / remove a ticker
@@ -28,12 +28,12 @@ Confirm the new ticker came back with `meta` + `forwardEstimates` (some thin nam
 
 ## 4. Dashboard side (only if the ticker enters a tracked portfolio)
 
-- The dashboard's lean snapshot is fetched independently — its ticker set comes from its own `fetch-daily-snapshot.mjs`. Ensure the new bare symbol (`GOTO`) is available there too if you'll track it.
+- The dashboard's lean snapshot picks the ticker up automatically — `fetch-daily-snapshot.mjs` imports the same `UNIVERSE_JK` — but only on its next run (weekday CI, or run it by hand). Confirm the new bare symbol (`GOTO`) is present there before tracking it.
 - When you add the ticker to a strategy's weights in `portfolios.json`, use the **bare** symbol and re-validate sums (see the `rebalance-portfolio` skill).
 
 ## Removing a ticker
 
-Delete it from `TICKERS`, regenerate, and **remove it from any `portfolios.json` weights** (re-normalize the remaining weights to sum to 1). Past rebalance rows that reference a now-missing ticker will simply contribute 0 if the asset is absent from the snapshot, but it's cleaner to fix forward-looking entries.
+Delete it from `UNIVERSE_JK`, regenerate, and **remove it from any `portfolios.json` weights** (re-normalize the remaining weights to sum to 1). Past rebalance rows that reference a now-missing ticker will simply contribute 0 if the asset is absent from the snapshot, but it's cleaner to fix forward-looking entries.
 
 ## Validate
 

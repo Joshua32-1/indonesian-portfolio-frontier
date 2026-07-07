@@ -164,7 +164,7 @@ export function computeTailMetrics(returns, riskFreeRate) {
  *
  * @param {{
  *   mode: 'tailAware' | 'avgMuSharpe',
- *   subsampleScenarios: number[][],    — pre-selected subsample (2 000 paths)
+ *   subsampleScenarios: number[][],    — pre-selected subsample (ROBUST_SUBSAMPLE_SIZE = 1000 paths)
  *   avgMeans: number[],                — mean of subsample per asset
  *   covMatrix: number[][],
  *   riskFreeRate: number,

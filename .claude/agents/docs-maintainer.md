@@ -27,7 +27,7 @@ You maintain documentation consistency for an IDX portfolio monorepo. When code 
 - Constants: `tau` (0.03), `omegaScale` (0.05), `DEFAULT_TAIL_PENALTY` (0.10), `DEFAULT_VOL_HALF_LIFE` (63), `FALLBACK_DAILY_VOL` (0.015), `DEFAULT_SECTOR_CAP` (0.80), `ROBUST_SUBSAMPLE_SIZE` (1000), `BI_RATE_FALLBACK` (0.0575), `LIQ_PENALTY_CAP/K` (0.9/7.5), `SQRT_252`.
 - Function signatures in API.md's tables.
 - Script names in CLAUDE.md / ARCHITECTURE.md / README.md.
-- New/removed tickers (the TICKERS list) reflected in counts and examples.
+- New/removed tickers (`UNIVERSE_JK` in `portfolio-app/data/universe.js`) reflected in counts and examples.
 
 ## Output
 

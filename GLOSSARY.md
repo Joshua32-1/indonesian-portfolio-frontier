@@ -18,8 +18,8 @@ Quant and IDX terms used across this repo. Each entry: a one-line definition and
 - **Dispersion** — analyst disagreement `(high − low)/mean`; feeds BL view uncertainty Ω. → `computeDispersion`, `returns.js`.
 - **Efficient frontier** — the risk/return scatter of optimal portfolios; here a Monte Carlo cloud plus the four labeled portfolios. → `EfficientFrontier.jsx`.
 - **IHSG (Jakarta Composite Index)** — the IDX broad-market benchmark; Yahoo ticker `^JKSE`. → `benchmark` in snapshot.
-- **`.JK`** — Yahoo suffix for IDX-listed tickers (`BBCA.JK`). The dashboard/`portfolios.json` use the bare symbol (`BBCA`).
-- **Ledoit-Wolf shrinkage** — pulls the sample covariance toward a scaled identity to reduce estimation noise; on by default. → `ledoitWolfShrinkage`.
+- **`.JK`** — Yahoo suffix for IDX-listed tickers (`BBCA.JK`), used only when *querying* Yahoo. Both snapshots, the dashboard, and `portfolios.json` store the bare symbol (`BBCA`).
+- **Ledoit-Wolf shrinkage** — pulls the sample covariance toward a scaled identity to reduce estimation noise; on by default. The intensity is a *heuristic* (not the formal Ledoit-Wolf estimator); the name is historical. → `ledoitWolfShrinkage`.
 - **Liquidity penalty ramp** — diagonal inflation `0.9·(1 − e^(−7.5·stress))` raising the apparent risk of thinly-traded names. → `LIQ_PENALTY_CAP`, `LIQ_PENALTY_K`.
 - **Methodology matrix** — the forward test's 300 live streams = 10 configs × 6 variants × 5 κ. Config = `pert` (legacy PERT) + BL × prior{cap,shrunk,equal} × τ{0.01,0.03,0.10}; κ = turnover penalty {0,0.1,0.25,0.5,0.75}; stream id = `<base>@<configTag>` (κ=0) or `<base>@<configTag>-k<KK>` (κ>0). → `portfolios.json`, [FORWARD-TEST.md](FORWARD-TEST.md).
 - **Min-variance portfolio (◆)** — lowest portfolio variance subject to constraints. → `monteCarlo.js`.

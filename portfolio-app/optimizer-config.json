@@ -1,5 +1,5 @@
 {
-  "_comment": "Config for the headless weekly optimizer (scripts/optimize.mjs). Mirrors the browser Workspace/Simulation defaults so automated runs match the UI. Edit here to change methodology for ALL future automated rebalances. Each weekly run opens a PR for human review before anything reaches production.",
+  "_comment": "Config for the headless weekly optimizer (scripts/optimize.mjs). Mirrors the browser Workspace/Simulation defaults so automated runs match the UI. Edit here to change methodology for ALL future automated rebalances. Each weekly run auto-commits directly to main (no PR); merge-rebalances.mjs validation is the guardrail.",
 
   "mcIterations": 100000,
   "maxPositionCap": 1.0,

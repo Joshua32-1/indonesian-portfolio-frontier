@@ -41,13 +41,11 @@ When changing a formula, constant, or default, also:
 
 ## Data files
 
-- **Never hand-edit `live-market-snapshot.json`** in either app — it is generated. To change its contents, change the fetch script (or the `TICKERS` list) and re-run `npm run fetch-snapshot`. See the [`refresh-snapshot`](.claude/skills/refresh-snapshot/SKILL.md) and [`add-ticker`](.claude/skills/add-ticker/SKILL.md) skills.
+- **Never hand-edit `live-market-snapshot.json`** in either app — it is generated. To change its contents, change the fetch script (or the universe in `portfolio-app/data/universe.js`) and re-run `npm run fetch-snapshot`. See the [`refresh-snapshot`](.claude/skills/refresh-snapshot/SKILL.md) and [`add-ticker`](.claude/skills/add-ticker/SKILL.md) skills.
 - **`portfolios.json`** (dashboard) is the only data file you may edit by hand (it is also appended to automatically by the weekly-rebalance Action via `optimize.mjs`). It is **append-only**: add new dated `rebalances[]` entries, never overwrite old ones; weights are fractions summing to ≈ 1.00; tickers are bare symbols (`BBCA`, not `BBCA.JK`); bump `"updated"`. See the [`rebalance-portfolio`](.claude/skills/rebalance-portfolio/SKILL.md) skill.
 - After changing any fetch script, snapshot shape, or `portfolios.json`, run the [`data-pipeline-checker`](.claude/agents/data-pipeline-checker.md) agent to validate the schema and the cross-app contract.
 
 ## Rebalance procedure (optimizer → dashboard)
-
-Weights reach `portfolios.json` one of two ways:
 
 `portfolios.json` is a **methodology matrix × κ** of 300 streams (`<base>@<configTag>` for κ=0, `-k<KK>` suffix for κ>0); weights reach it one of two ways:
 

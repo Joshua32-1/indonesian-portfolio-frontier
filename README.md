@@ -3,7 +3,7 @@
 | Directory | Purpose |
 |-----------|---------|
 | [`portfolio-app/`](portfolio-app/) | IDX portfolio optimizer (Monte Carlo, efficient frontier). Run locally. |
-| [`backtest-portfolio/`](backtest-portfolio/) | Look-ahead-free, cost-aware walk-forward backtester of the optimizer machinery (net of IDX transaction costs, gross alongside) — tail-aware Max-Sharpe + tail-λ variants vs min-variance / equal-weight / IHSG across weekly/monthly/quarterly with a turnover-penalty (κ) sweep. Run locally; artifacts are regenerated, not committed. |
+| [`backtest-portfolio/`](backtest-portfolio/) | Look-ahead-free, cost-aware walk-forward backtester of the optimizer machinery (net of IDX transaction costs, gross alongside) — tail-aware Max-Sharpe + tail-λ variants vs min-variance / equal-weight / IHSG across weekly/monthly/quarterly with a turnover-penalty (κ) sweep. Run locally; history artifacts are regenerated (gitignored), while the 3 canonical `backtest-results*.json` are committed (the main one refreshed weekly by CI). |
 | [`live-dashboard-portfolio/`](live-dashboard-portfolio/) | Minimal live tracker (IHSG vs model portfolios). Deploy to **Vercel** with Root Directory = `live-dashboard-portfolio`. |
 
 ## Quick start

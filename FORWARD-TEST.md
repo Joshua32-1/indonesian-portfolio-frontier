@@ -57,7 +57,8 @@ For a local recompute, re-seed via [`portfolio-app/scripts/seed-forward-matrix.m
 
 There is **no human review gate** — the push redeploys production automatically. The guardrail
 is `merge-rebalances.mjs`, which **fails the job (no push)** if any weight map doesn't sum to
-~1 or references an unknown ticker/stream id, so malformed weights never reach production. Past
+~1 (±0.005), references an unknown stream id, or has a malformed effective date, so malformed
+weights never reach production (tickers themselves are *not* validated against the universe). Past
 index values never change — only the slope from the new `effective` date forward.
 
 ### Reviewing an auto-committed rebalance

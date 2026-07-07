@@ -62,7 +62,7 @@ node scripts/merge-rebalances.mjs <emit…> # assemble per-config emits → port
 
 - **Annualization:** daily σ × √252, weekly σ × √52, 252 trading days/year (`SQRT_252` in `matrixEngine.js`).
 - **Risk-free rate:** Bank Indonesia BI-Rate, live-fetched at snapshot time, fallback **5.75%** (`BI_RATE_FALLBACK` in `fetch-snapshot.js`). Used as `r_f` everywhere.
-- **Tickers:** Yahoo uses the `.JK` suffix (`BBCA.JK`) in the optimizer snapshot; `portfolios.json` and the dashboard use the bare symbol (`BBCA`).
+- **Tickers:** Yahoo is *queried* with the `.JK` suffix (`BBCA.JK`); both snapshots, `portfolios.json`, and the dashboard store the bare symbol (`BBCA`) — the fetch scripts strip the suffix.
 - **Currency:** all monetary values are IDR.
 - **Benchmark:** IHSG = Jakarta Composite Index, Yahoo ticker `^JKSE`.
 

@@ -88,7 +88,7 @@ The five profiles below cover the main cases you are likely to encounter when co
 | `tau` | 0.030 | IDX default; ~40–45% weight toward analyst Q for large-caps |
 | `analystConfidence` | 70% | Moderate — large-cap names have 15–25 analysts, small variance in coverage |
 | `dispersionOmega` | 80% | Banks/telcos are tight; commodity names inflate Ω appropriately |
-| `largeCapBias` | 25% | Tilts slightly toward large names for a stable prior |
+| `largeCapBias` | 25% | Cap-weight exponent `1 − 2·bias` (0.5 here) — moderately flattens the cap-weight prior; **higher values tilt toward equal-weight/smaller names** |
 | `volHalfLife` | 63 days | One quarter; appropriate for low-regime-change markets |
 | `tailPenalty` λ | 0.10 | Light tail cushion; good starting point |
 | Correlation window | Max range | 700+ weeks; stable ρ estimates |
@@ -306,7 +306,7 @@ The vol half-life controls how quickly the weight assigned to past daily returns
 | Post-shock (sudden vol spike) | 21–42 days | Recent high-vol days should dominate; old calm-period returns should fade fast |
 | Pre-shock calm after a crash | 42–63 days | Allow the crash to fade somewhat but don't rush back to pre-shock estimates |
 | Backtesting or academic comparison | 126 days | Closer to equal-weight 252-day window; more comparable to standard risk models |
-| New listing with short daily history | 63 (fallback applies if < 30 days) | Fallback σ_daily = 0.015 (≈24% annual) is used when history is insufficient |
+| New listing with short daily history | 63 (fallback applies below 2 return observations) | Fallback σ_daily = 0.015 (≈24% annual) is used when history is insufficient |
 
 **Quick-select preset buttons in WORKSPACE:** 21, 42, 63, 84, 126. You can also use the slider for any value in the 5–126 range.
 
@@ -552,7 +552,7 @@ Run through this checklist on a regular schedule (suggested: weekly for active p
 
 2. Review the correlation window. Has the aligned history range extended significantly (new data) or contracted (if you've added/removed names)? Consider whether the max-range assumption still holds.
 
-3. Re-examine the universe profile. Have any names' analyst coverage changed materially? Have new listings been added to the default TICKERS? Adjust the profile accordingly.
+3. Re-examine the universe profile. Have any names' analyst coverage changed materially? Have new listings been added to the universe (`data/universe.js`)? Adjust the profile accordingly.
 
 4. Compare the last month's Robust ★ weights against actual IDX price moves to informally validate that the tail assumptions were reasonable.
 
@@ -578,7 +578,7 @@ Complete reference of every user-facing parameter, its location in the UI, its r
 | `useLiquidityRisk` | WORKSPACE, factor panel | Toggle | ON | [Part V](README.md#part-v--black-litterman-factor-model) |
 | `portfolioSize` | WORKSPACE, portfolio size panel | IDR amount | 0 (off) | [Part V](README.md#part-v--black-litterman-factor-model) |
 | `tailPenalty` λ | WORKSPACE, tail panel | 0–1.0 | 0.10 | [Part VI](README.md#part-vi--tail-aware-robust-optimization) |
-| `turnoverPenalty` κ | WORKSPACE, tail panel | 0–1.0 | 0 | [Part VI](README.md#part-vi--tail-aware-robust-optimization) |
+| `turnoverPenalty` κ | WORKSPACE, tail panel | 0–0.5 (step 0.025) | 0 | [Part VI](README.md#part-vi--tail-aware-robust-optimization) |
 | Global position cap | WORKSPACE, constraints | 5–100% | 100% (off) | [Part VII](README.md#part-vii--portfolio-outputs--constraints) |
 | Sector caps | WORKSPACE, sector panel | 5–100% per sector | 80% | [Part VII](README.md#part-vii--portfolio-outputs--constraints) |
 | Per-asset max weight | WORKSPACE, asset table | 0–100% per asset | Unset | [Part VII](README.md#part-vii--portfolio-outputs--constraints) |

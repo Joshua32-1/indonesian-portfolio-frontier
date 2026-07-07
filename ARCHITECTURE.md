@@ -37,7 +37,7 @@ my-portfolio-app/
 │   │   ├── fetch-backtest-history.mjs  # full daily+weekly history + dollar-vol + shares-out
 │   │   ├── run-strategy-backtest.mjs   # precompute tail-aware variants × frequency × κ-sweep
 │   │   └── generate-reference-artifacts.mjs  # sharded reference backtest
-│   ├── public/*.json                # generated history + precomputed results (regenerated, not committed)
+│   ├── public/*.json                # history + shards regenerated (gitignored); the 3 canonical backtest-results*.json ARE committed (main one refreshed by weekly CI)
 │   ├── src/backtestEngine.js        # imports portfolio-app/src/math; net-of-cost engine
 │   └── README.md
 │
@@ -52,7 +52,7 @@ my-portfolio-app/
     │   ├── backseed-kappa.mjs          # one-shot: seed κ>0 history for existing effective dates
     │   ├── lib/kappaExpand.mjs         # shared axes + κ blend helpers (mirrors backtester)
     │   └── merge-rebalances.mjs        # assemble per-config emits → portfolios.json + κ-expand
-    ├── src/math/                    # portfolioIndex.js, priceAlign.js, transactionCosts.js (derived net-of-cost)
+    ├── src/math/                    # portfolioIndex.js, priceAlign.js, transactionCosts.js (derived net-of-cost), attribution.js
     ├── vercel.json
     └── README.md                    # deploy + rebalance workflow
 ```
@@ -60,7 +60,7 @@ my-portfolio-app/
 ## Responsibilities
 
 - **`portfolio-app`** is where research happens. It pulls a rich snapshot, runs the full quant engine in-browser, and presents four candidate portfolios on an efficient frontier. It is **never deployed** — it stays on the analyst's machine. It produces *weights*. It also hosts the headless `optimize.mjs` (same engine, no UI) that the automated weekly rebalance runs.
-- **`backtest-portfolio`** is the **evidence layer**. It reuses `portfolio-app/src/math` to run the construction machinery (tail-aware Max-Sharpe + tail-λ variants, min-variance, equal-weight) walk-forward and look-ahead-free over historical prices, **net of an IDX transaction-cost model** (gross alongside), across weekly/monthly/quarterly with a turnover-penalty (κ) sweep. Local only; its data artifacts are regenerated, not committed.
+- **`backtest-portfolio`** is the **evidence layer**. It reuses `portfolio-app/src/math` to run the construction machinery (tail-aware Max-Sharpe + tail-λ variants, min-variance, equal-weight) walk-forward and look-ahead-free over historical prices, **net of an IDX transaction-cost model** (gross alongside), across weekly/monthly/quarterly with a turnover-penalty (κ) sweep. Local only; the raw history and per-prior shards are regenerated (gitignored), while the three canonical `backtest-results*.json` artifacts are committed (weekly CI refreshes the main `backtest-results.json`; the `-shrunk`/`-equal` variants are regenerated locally via `generate-reference-artifacts.mjs`).
 - **`live-dashboard-portfolio`** is the public scoreboard. It tracks the *chosen* weights against IHSG using a lean daily snapshot, compounding an index continuously from inception. It holds **no optimization code** — only index stitching plus a small **derived** layer: rebalance frequency (weekly/monthly/quarterly) and gross/net-of-cost (liquidity-aware trailing-63 ADV via `transactionCosts.js`, fed by the snapshot's `dollarVol`) are computed in-browser, not stored.
 
 The bridge to the dashboard is `portfolios.json` — now a **methodology matrix × κ of 300 streams = 10 configs × 6 variants × 5 κ** (config = `pert` + BL × prior{cap,shrunk,equal} × τ{0.01,0.03,0.10}; κ = turnover penalty {0,0.1,0.25,0.5,0.75}; stream id = `<base>@<configTag>` for κ=0, `-k<KK>` suffix for κ>0). It is appended **either by hand** (the analyst reads weights off the optimizer's Analytics tab) **or automatically** by the weekly rebalance Action — a parallel config matrix where each `optimize.mjs --emit` job writes only its 6 κ=0 streams and a `merge-rebalances.mjs` step assembles them **and synthesizes the κ>0 variants** (post-hoc blend toward drift) and **commits directly to `main`** (no PR; the push auto-redeploys Vercel — the merge script fails the job rather than pushing malformed weights). Separately, `refresh-views.yml` captures point-in-time analyst views weekly into `portfolio-app/data/view-history/` so the live strategy can later be κ-replayed at higher fidelity.
@@ -114,5 +114,5 @@ Each daily bar compounds: `index_t = index_{t-1} · exp(Σ wᵢ(t)·rᵢ,t)`, wh
 
 - **Dashboard → Vercel.** `vercel.json` sets framework `vite`, install `npm ci`, build `npm run build`, output `dist`, with SPA rewrites. In the Vercel project, **Root Directory = `live-dashboard-portfolio`**. Every `git push` auto-redeploys.
 - **Optimizer:** local only; `npm run build` produces `dist/` but it isn't deployed.
-- **CI cron** (`.github/workflows/refresh-dashboard.yml`): weekdays at **11:00 UTC (18:00 WIB**, after IDX close). Steps: checkout → Node 20 → `npm ci` in the dashboard → `npm run fetch-snapshot` (with `NODE_OPTIONS=--max-old-space-size=512`) → commit `live-dashboard-portfolio/data/live-market-snapshot.json` **only if changed** → push (triggers Vercel). This is the source of the recurring `chore: refresh IDX daily snapshot` commits.
+- **CI cron** (`.github/workflows/refresh-dashboard.yml`): weekdays at **11:00 UTC (18:00 WIB)**, after IDX close. Steps: checkout → Node 20 → `npm ci` in the dashboard → `npm run fetch-snapshot` (with `NODE_OPTIONS=--max-old-space-size=512`) → commit `live-dashboard-portfolio/data/live-market-snapshot.json` **only if changed** → push (triggers Vercel). This is the source of the recurring `chore: refresh IDX daily snapshot` commits.
 - **Backtest CI cron** (`.github/workflows/refresh-backtest.yml`): weekly, **Sunday 12:00 UTC (19:00 WIB)**, plus manual dispatch. Steps: checkout → Node 20 → `npm ci` in `backtest-portfolio` → `npm run fetch` (rebuilds the gitignored `backtest-history.json` on the runner) → `npm run backtest` (full sweep, `NODE_OPTIONS=--max-old-space-size=4096`, 90-min timeout) → commit `backtest-portfolio/public/backtest-results.json` **only if changed**. Heavy (~45–60 min), hence weekly rather than daily. Per-prior variant files (`…-shrunk`/`…-equal`) are not regenerated here.
