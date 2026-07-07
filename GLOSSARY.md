@@ -9,7 +9,7 @@ Quant and IDX terms used across this repo. Each entry: a one-line definition and
 - **Beta-PERT** — a bounded distribution over `[low, mean, high]` (mean `(low+4·mode+high)/6`); used to sample analyst price targets. → `buildScenarioBank`, `monteCarlo.js`.
 - **BI-Rate** — Bank Indonesia policy rate, the risk-free rate `r_f`; live-fetched, fallback 5.75%. → `fetch-snapshot.js`, `riskFreeRate` in snapshot.
 - **Black-Litterman (BL)** — blends a market-equilibrium prior (π) with subjective views (Q) into posterior expected returns μ_BL. → `blackLitterman.js`.
-- **Cap-weight prior (π)** — equilibrium expected returns implied by market-cap weights: `π = Δ·Σ·w_cap`. → `computeEquilibriumReturns`.
+- **Cap-weight prior (π)** — equilibrium expected **total** returns implied by market-cap weights: `π = r_f + Δ·Σ·w_cap` (same total-return space as the views Q). → `computeEquilibriumReturns`.
 - **Cholesky decomposition** — factor `Σ = L·Lᵀ`; `L` generates correlated random shocks. → `choleskyDecompose`, `drawCorrelatedShocks`.
 - **Consensus portfolio (◎)** — implementable max-Sharpe allocation on the mean (BL/PERT) returns. → `monteCarlo.js`.
 - **Correlation (ρ, Pearson)** — pairwise co-movement of weekly log-returns over the chosen window. → `computeCorrelationFromDateRange`.

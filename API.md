@@ -206,7 +206,7 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 |----------|---------|
 | `applyPriorMode(capWeights, priorMode='cap')` | Transforms the equilibrium prior weights: `cap` = identity (byte-identical), `equal` = 1/n, `shrunk` = 0.5·cap + 0.5·equal |
 | `defaultDelta(covMatrix, capWeights, riskFreeRate)` | Implied risk aversion Δ from cap-weight equilibrium |
-| `computeEquilibriumReturns(covMatrix, capWeights, { riskFreeRate=0.0575, delta=null })` | Prior π = Δ·Σ·w_cap |
+| `computeEquilibriumReturns(covMatrix, capWeights, { riskFreeRate=0.0575, delta=null })` | Prior π = r_f + Δ·Σ·w_cap (**total** returns, same space as views Q) |
 | `computeViewUncertainty(assets, covMatrix, factorConfig, maxAnalysts)` | View uncertainty Ω diagonal |
 | `blackLittermanPosterior({ pi, Q, omega, covMatrix, tau })` | Posterior μ_BL |
 | `buildBlackLittermanContext({ ... })` | Pre-compute π, Ω for a run |

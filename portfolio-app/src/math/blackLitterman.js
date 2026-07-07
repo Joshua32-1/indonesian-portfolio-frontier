@@ -57,15 +57,23 @@ export function defaultDelta(covMatrix, capWeights, riskFreeRate) {
   return marketVar > 1e-12 ? excess / marketVar : 2.5;
 }
 
-/** Equilibrium returns π = δ Σ w_mkt. */
+/**
+ * Equilibrium TOTAL returns π = r_f + δ Σ w_mkt.
+ *
+ * δΣw is the CAPM equilibrium EXCESS return; r_f is added so π lives in the
+ * same total-return space as the analyst views Q ((target − px)/px + div) and
+ * as every downstream consumer (the Sharpe objective subtracts r_f itself).
+ * Blending total-π with total-Q in the posterior is exact: the BL blend
+ * weights sum to the identity, so the r_f shift passes through unchanged.
+ */
 export function computeEquilibriumReturns(covMatrix, capWeights, { riskFreeRate = 0.0575, delta = null } = {}) {
   const d = delta ?? defaultDelta(covMatrix, capWeights, riskFreeRate);
-  return matVecMul(covMatrix, capWeights).map(v => d * v);
+  return matVecMul(covMatrix, capWeights).map(v => riskFreeRate + d * v);
 }
 
 /**
  * Equilibrium-prior reference weights under one of three modes. The ONLY thing that
- * varies the BL prior — everything downstream (π via δΣw, Ω, posterior) is unchanged.
+ * varies the BL prior — everything downstream (π via r_f + δΣw, Ω, posterior) is unchanged.
  * Mirrors the backtester's buildStepContexts prior definitions exactly:
  *   'cap'    → the supplied cap-weight vector, returned UNCHANGED (byte-identical path)
  *   'equal'  → 1/n
@@ -92,9 +100,10 @@ export function applyPriorMode(capWeights, priorMode = 'cap') {
  * omegaScale is independent of τ. τ only enters blackLittermanPosterior via τΣ (the prior
  * precision side), so varying τ genuinely shifts the π-vs-Q blend without cancellation.
  *
- * IDX note: on average, analyst Q is ~1.5 annualised σ above π. omegaScale=0.05 combined
- * with τ=0.03 places μ_BL at roughly 40–45% toward Q for large-caps by default —
- * meaningful BL shrinkage from structurally optimistic sell-side targets.
+ * IDX note: on average, analyst Q sits on the order of 1 annualised σ above (total-return) π.
+ * omegaScale=0.05 combined with τ=0.03 shrinks views toward π by ~50% on average across the
+ * universe (more for thin coverage, less for heavily-covered large-caps) — meaningful BL
+ * shrinkage from structurally optimistic sell-side targets.
  */
 export function computeViewUncertainty(assets, covMatrix, factorConfig, maxAnalysts) {
   const cfg = factorConfig ?? {};
@@ -155,7 +164,7 @@ export function buildBlackLittermanContext({
   const cfg = factorConfig ?? {};
   const pi = computeEquilibriumReturns(covMatrix, capWeights, { riskFreeRate });
   const omega = computeViewUncertainty(assets, covMatrix, cfg, maxAnalysts);
-  const tau = cfg.tau ?? 0.05;
+  const tau = cfg.tau ?? 0.03; // matches DEFAULT_FACTOR_CONFIG.tau (IDX default)
   const useViews = cfg.useAnalystViews !== false;
 
   if (!useViews) {

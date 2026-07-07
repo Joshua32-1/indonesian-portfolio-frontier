@@ -85,7 +85,7 @@ The five profiles below cover the main cases you are likely to encounter when co
 | Setting | Recommended value | Notes |
 |---------|-------------------|-------|
 | `useFactorModel` | ON | Worth enabling; analyst coverage is sufficient to produce meaningful views |
-| `tau` | 0.030 | IDX default; ~40–45% weight toward analyst Q for large-caps |
+| `tau` | 0.030 | IDX default; posterior lands ~50% toward analyst Q on average (higher for heavily-covered large-caps, lower for thin names) |
 | `analystConfidence` | 70% | Moderate — large-cap names have 15–25 analysts, small variance in coverage |
 | `dispersionOmega` | 80% | Banks/telcos are tight; commodity names inflate Ω appropriately |
 | `largeCapBias` | 25% | Cap-weight exponent `1 − 2·bias` (0.5 here) — moderately flattens the cap-weight prior; **higher values tilt toward equal-weight/smaller names** |

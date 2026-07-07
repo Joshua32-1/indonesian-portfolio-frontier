@@ -77,13 +77,18 @@ function betaRand(alpha, beta) {
 
 // ── Beta-PERT Sampler  ────────────────────────────────────────────────────────
 
-function pertSample(low, mode, high) {
-  if (low >= high) return mode;
+/**
+ * Standard Beta-PERT: shape parameters derive from the MODE m, which makes the
+ * distribution mean equal (low + 4m + high)/6. (Deriving the shapes from that
+ * mean instead biases every draw toward the range midpoint.)
+ * Exported for the validation suite.
+ */
+export function pertSample(low, mode, high) {
+  if (low >= high) return Math.max(Math.min(low, high), Math.min(mode, Math.max(low, high)));
   const m = Math.max(low, Math.min(high, mode));
   const range = high - low;
-  const mu    = (low + 4 * m + high) / 6;
-  const α1    = 1 + 4 * (mu - low)  / range;
-  const α2    = 1 + 4 * (high - mu) / range;
+  const α1    = 1 + 4 * (m - low)  / range;
+  const α2    = 1 + 4 * (high - m) / range;
   return low + betaRand(α1, α2) * range;
 }
 

@@ -279,14 +279,14 @@ The Beta-PERT distribution is a bounded distribution parameterized by minimum, m
 For each Monte Carlo path, a price target is sampled for each asset:
 
 ```
-μ_PERT  = (lowTarget + 4 × meanTarget + highTarget) / 6
-
 range   = highTarget − lowTarget
-α1      = 1 + 4 × (μ_PERT − lowTarget) / range
-α2      = 1 + 4 × (highTarget − μ_PERT) / range
+α1      = 1 + 4 × (meanTarget − lowTarget) / range
+α2      = 1 + 4 × (highTarget − meanTarget) / range
 
 sampledPrice = lowTarget + Beta(α1, α2) × range
 ```
+
+The shape parameters derive from `meanTarget` acting as the distribution's **mode** (the standard PERT parameterization), which makes the distribution mean equal `(lowTarget + 4 × meanTarget + highTarget) / 6`. (Deriving the shapes from that mean instead — a common mistake — biases every draw toward the range midpoint.)
 
 The sampled price is converted to an annualized return by adding the dividend yield:
 
@@ -341,10 +341,11 @@ For each scenario path when the factor model is active:
 The equilibrium return for each asset is derived from the CAPM relationship:
 
 ```
-π = δ × Σ × w_mkt
+π = r_f + δ × Σ × w_mkt
 ```
 
 where:
+- **r_f** is the BI-Rate. `δ × Σ × w_mkt` is the CAPM equilibrium **excess** return; adding r_f puts π in the same **total-return** space as the analyst views Q (`(target − px)/px + div`) and as the Sharpe objective (which subtracts r_f itself). By construction, the cap-weighted portfolio's π equals r_f + 8%.
 - **δ** is the implied market risk aversion, derived from an assumed 8% equity premium above the risk-free rate applied to the cap-weighted market variance
 - **Σ** is the covariance matrix computed in Part III
 - **w_mkt** are cap weights, shaped by the large-cap bias parameter:
@@ -385,7 +386,7 @@ where:
 
 ### IDX calibration context
 
-> On IDX, analyst 12-month targets average roughly 50 percentage points above the cap-weight equilibrium implied return — a gap of approximately 1.5 annualized σ for a typical large-cap name. The default `τ = 0.03` places μ_BL at roughly 40–45% of the way toward the analyst view for a large-cap name with 20+ analysts, providing meaningful BL shrinkage without ignoring the signal entirely. `omegaScale = 0.05` is hardcoded and not exposed as a UI slider; changing it would require editing `src/math/factorConfig.js` directly and is not recommended unless adapting the app for a non-IDX market with very different sell-side characteristics.
+> On IDX, analyst 12-month targets average roughly 50 percentage points above the cap-weight equilibrium implied (total) return — a gap on the order of 1 annualized σ (≈0.7σ for a heavily-covered large-cap like BBCA). At the default `τ = 0.03` / `omegaScale = 0.05`, the posterior shrinks views toward π by roughly **50% on average across the universe** — with a strong coverage gradient: thinly-covered names (≤8 analysts) are shrunk ~65–85%, while heavily-covered large-caps (20+ analysts) are shrunk only ~0–40% — the most heavily-covered names can even overshoot Q slightly, because correlated optimistic views reinforce each other in the joint posterior. `omegaScale = 0.05` is hardcoded and not exposed as a UI slider; changing it would require editing `src/math/factorConfig.js` directly and is not recommended unless adapting the app for a non-IDX market with very different sell-side characteristics. (Measured on the 2026-07 snapshot; the exact percentages drift with prices and targets.)
 
 **Defaults:**
 

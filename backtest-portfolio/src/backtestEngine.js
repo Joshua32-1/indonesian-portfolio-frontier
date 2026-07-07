@@ -617,14 +617,12 @@ function buildStepContexts(grid, ctx) {
       capW = priorMode === 'shrunk' ? capRaw.map((v, k) => 0.5 * v + 0.5 * equalW[k]) : capRaw;
     }
     const delta = defaultDelta(covMatrix, capW, rf);
-    // computeEquilibriumReturns returns EXCESS returns (π = δ·Σ·w). The shared Sharpe objective
-    // subtracts r_f (it expects TOTAL returns), so feed total returns by adding r_f back: since the
-    // book is fully invested (Σw=1), wᵀ(π+r_f) − r_f = wᵀπ, exactly cancelling the subtraction and
-    // restoring the true tangency. Without this, the −r_f/σ term rewards variance → Max-Sharpe/Tail
-    // blow out into concentrated, high-turnover portfolios. (Tail's CVaR gap is not strictly
-    // shift-invariant — realized returns are lognormal in μ — but the +r_f gross-up is near-uniform
-    // across weights, ≈ a ~r_f λ-rescale, immaterial to the tail optimum.)
-    const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rf, delta }).map(v => v + rf);
+    // computeEquilibriumReturns returns TOTAL returns (π = r_f + δ·Σ·w) — the space the shared
+    // Sharpe objective expects (it subtracts r_f itself). Since the book is fully invested
+    // (Σw=1), wᵀπ − r_f = wᵀ(δΣw), the true tangency numerator. Without the r_f gross-up in π,
+    // the −r_f/σ term would reward variance → Max-Sharpe/Tail blow out into concentrated,
+    // high-turnover portfolios.
+    const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rf, delta });
 
     const rVec = included.map(a => {
       const p0 = row[a.ticker], p1 = rowNext[a.ticker];
