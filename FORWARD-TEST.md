@@ -162,6 +162,23 @@ These rules protect the integrity of the out-of-sample test:
 
 ---
 
+## Migration log — deliberate history replacements
+
+The append-only guardrails above hold for routine operation. On rare occasions a **correctness fix in the optimizer math** invalidates already-seeded weights; when that happens the *entire* matrix is re-seeded from archived inputs as a single documented migration (not a backfill of new dates). Each such event is logged here.
+
+### 2026-07-09 — BL total-return + PERT-parameterization fix
+
+A whole-repo quant audit found two return-biasing bugs (fixed in commit `ae42d0b`): the Black-Litterman equilibrium prior π was in **excess**-return space while the views Q and the Sharpe objective were **total**-return (π is now `r_f + δΣw`), and the Beta-PERT sampler derived its shape parameters from the distribution **mean** instead of the **mode**, biasing every scenario mean toward the range midpoint. Both bugs shifted the seeded weights of every BL stream (and, via the PERT fix, the `pert` streams too), so all 300 streams were re-seeded for both existing effective dates (2026-06-30, 2026-07-05).
+
+- **Pre-migration matrix preserved** on branch `pre-math-fix-matrix` (and it also fixed a prior gap — the old 2026-07-05 rows covered only 120 of 300 streams; the re-seed is a full 300/300).
+- **Inputs used (faithful replay):**
+  - **2026-06-30** — the exact archived snapshot from commit `cc6e81c` (weekly history → 2026-06-19), i.e. the same input the original inception seed saw.
+  - **2026-07-05** — a fresh Yahoo price fetch (weekly history → 2026-07-03, the same weekly end the original CI run used) with the point-in-time analyst views / caps / dividend yield / BI-Rate overlaid from `view-history/views-2026-07-03.json`. **Caveat:** the theta-decayed daily vol saw a few extra daily bars vs. the original run, so 2026-07-05 is a near-exact (not byte-exact) replay; 2026-06-30 is exact.
+- **Determinism:** the optimizer uses `deterministicStarts` (no Dirichlet randoms); scenario draws still use `Math.random`, so re-runs vary at the &lt;0.01% weight level — immaterial next to the fix's ~0.16–0.20 average L1 weight shift.
+- **Verified** by the `data-pipeline-checker` agent (full contract + κ-blend invariants clean) and `validate-factors.mjs` (27/27, incl. new BL-units and PERT-mean regression checks).
+
+---
+
 ## Quick reference
 
 ```
