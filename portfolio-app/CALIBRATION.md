@@ -290,9 +290,13 @@ w_mkt_i ∝ marketCap_i^(1 − 2 × largeCapBias)
 
 This parameter is not exposed in the UI because changing it has global effects that interact with all other BL parameters. It sets the baseline uncertainty level for every name as a multiple of that name's variance Σ_ii.
 
+There is also a structural reason it is not a second slider: **only the ratio `omegaScale / τ` affects μ_BL.** Scaling both by the same factor leaves the posterior bit-identical, so a second slider would just be a redundant axis — the τ slider already spans every achievable π-vs-Q blend. Keeping the scalar separate from τ (rather than using the textbook `Ω = τPΣPᵀ`) is what makes τ identifiable in the first place: see [Why Ω is not τPΣPᵀ](README.md#why-ω-is-not-τpσpᵀ).
+
 The value 0.05 was chosen by calibrating the effective π-vs-Q blend for representative IDX names (48% shrinkage for BBCA with 24 analysts, 83% shrinkage for speculative names at 115% Q). The academic RMSE-implied value (~0.61) would effectively ignore analyst views entirely for most names.
 
 If you are adapting this app for a non-IDX market (e.g. ASX or SGX) where analyst accuracy and sell-side optimism are materially different, you may want to recalibrate omegaScale. Edit `src/math/factorConfig.js` directly — change the `omegaScale` value in `DEFAULT_FACTOR_CONFIG` — and re-run `validate-factors.mjs` to confirm the BL posterior is shifting as expected.
+
+Because only the ratio matters, recalibrating `omegaScale` is equivalent to re-centering what the whole τ range means. Do it when the *default* τ = 0.03 should stand for a different baseline level of skepticism (a new market, materially different sell-side behavior) — not as a way to reach a blend the τ slider could already produce.
 
 ---
 
