@@ -365,14 +365,30 @@ The diagonal matrix Ω encodes how much the optimizer should trust each analyst 
 ```
 
 where:
-- **omegaScale** (hardcoded at 0.05) sets the baseline uncertainty level relative to asset variance
+- **omegaScale** (hardcoded at 0.05) sets the baseline uncertainty level relative to asset variance — a free constant deliberately *not* set to τ (see *Why Ω is not τPΣPᵀ* below)
 - **dispersion_i** = `(high − low) / mean` from Part IV — wide target spread → higher ω
 - **dispersionOmega** (UI slider, 0–100%) controls how strongly target spread inflates uncertainty
 - **maxAnalysts** = the highest analyst count in the active universe
 - **analysts_i** = analyst count for asset i — fewer analysts → higher ω
 - **analystConfidence** (UI slider, 0–100%) controls the exponent on analyst coverage
 
-This formulation is **decoupled from τ** (see below). The uncertainty ω_i is set in absolute terms relative to Σ_ii, so changing τ genuinely moves the π-vs-Q blend rather than having τ and Ω cancel each other out.
+This formulation is **decoupled from τ**. The uncertainty ω_i is set in absolute terms relative to Σ_ii, so changing τ genuinely moves the π-vs-Q blend rather than having τ and Ω cancel each other out.
+
+### Why Ω is not τPΣPᵀ
+
+The canonical He–Litterman choice is `Ω = diag(P(τΣ)Pᵀ)`, which for absolute views (`P = I`, so `PΣPᵀ = Σ`) is simply `ω_i = τ · Σ_ii`. It is attractive because it is self-calibrating — Ω lands in the right units with no free constant. But with `P = I` it makes **τ cancel exactly** out of the posterior mean. Writing `D = diag(Σ)`:
+
+```
+μ_BL = [(τΣ)⁻¹ + (τD)⁻¹]⁻¹ [(τΣ)⁻¹π + (τD)⁻¹Q]
+     = τ[Σ⁻¹ + D⁻¹]⁻¹ · τ⁻¹[Σ⁻¹π + D⁻¹Q]        ← τ factors out of both sides
+     = [Σ⁻¹ + D⁻¹]⁻¹ [Σ⁻¹π + D⁻¹Q]
+```
+
+Using the full (non-diagonal) `Ω = τΣ` degenerates further, to a fixed `μ_BL = ½(π + Q)` with no free parameters at all. Either way τ becomes unidentifiable: the τ slider would be a no-op, and the forward test's τ ∈ {0.01, 0.03, 0.10} axis would collapse its 9 BL configs into 3 identical triplets (see [FORWARD-TEST.md](../FORWARD-TEST.md)). τ *does* survive in the posterior **covariance** `M = [(τΣ)⁻¹ + Ω⁻¹]⁻¹` — but this codebase never uses M. `posteriorInv` is consumed only to produce the posterior mean; portfolio risk always comes from the prior Σ (`simCov`). So there would be no residual τ dependence anywhere in the output.
+
+The ω_i formula above therefore keeps the useful half of the convention — ω_i stays proportional to Σ_ii, so a high-vol name automatically gets a wider view band — and substitutes the free scalar `omegaScale` for τ. Beyond restoring an identifiable τ, that buys per-name **view quality**: `dispersionOmega` and `analystConfidence` encode that a 24-analyst target and a 3-analyst target are not equally trustworthy, which `τPΣPᵀ` cannot express at all. Measured shrinkage toward π at the default τ = 0.03 is ~43% for BBCA (24 analysts) vs ~85% for BIRD; under `Ω = diag(τΣ)` those become ~15% and ~42%, driven only by the correlation structure of Σ.
+
+**Only the ratio `omegaScale / τ` is identified.** Scaling both by the same factor leaves μ_BL bit-identical, so sweeping τ ∈ {0.01, 0.03, 0.10} at a fixed `omegaScale = 0.05` is exactly equivalent to sweeping `omegaScale/τ` ∈ {5, 1.67, 0.5}. Hardcoding `omegaScale` costs no generality as long as τ is free — and freeing both would only add an unidentified direction to the config matrix.
 
 ### BL posterior
 
