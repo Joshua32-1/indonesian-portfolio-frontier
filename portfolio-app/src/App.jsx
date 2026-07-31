@@ -149,6 +149,7 @@ export default function App() {
   const [benchmark,    setBenchmark]    = useState(null);
   const [historyRange, setHistoryRange] = useState(null);
   const [riskFreeRate, setRiskFreeRate]  = useState(DEFAULT_RF);
+  const [rfEffective,  setRfEffective]  = useState(null);
   const [loadStatus,   setLoadStatus]   = useState('loading');
   const [loadError,    setLoadError]    = useState(null);
 
@@ -199,6 +200,7 @@ export default function App() {
         setBenchmark(bench ?? null);
         setHistoryRange(range);
         setRiskFreeRate(rf ?? DEFAULT_RF);
+        setRfEffective(snap.riskFreeRateEffective ?? null);
         const sectors = [...new Set(raw.map(a => a.sector))];
         setSectorCaps(buildSectorCapsForSectors(sectors));
         const initialActive = new Set(raw.map(a => a.ticker));
@@ -214,6 +216,22 @@ export default function App() {
         setLoadStatus('ready');
       })
       .catch(err => { setLoadError(err.message); setLoadStatus('error'); });
+  }, []);
+
+  // ── 1b. Overlay the cron-refreshed BI-Rate ────────────────────────────────
+  // live-market-snapshot.json is only as fresh as the last fetch-snapshot run, but
+  // data/bi-rate.json is rewritten by the weekday cron — so on a stale snapshot (or a
+  // `vite` start that skipped predev) this is the fresher number. Both are served from
+  // publicDir. Failure is silent: the snapshot value already loaded is a fine default.
+  useEffect(() => {
+    fetch('/bi-rate.json')
+      .then(r => (r.ok ? r.json() : null))
+      .then(c => {
+        if (!c || !Number.isFinite(c.current)) return;
+        setRiskFreeRate(c.current);
+        setRfEffective(c.effective ?? null);
+      })
+      .catch(() => { /* keep the snapshot's r_f */ });
   }, []);
 
   // Sync sector cap entries when snapshot sectors change (preserve user overrides).
@@ -445,7 +463,9 @@ export default function App() {
               {'  ·  '}{lastRun.meta.activeCount} assets
             </span>
           )}
-          <span style={styles.rfBadge}>RF {(riskFreeRate * 100).toFixed(2)}% · BI RATE</span>
+          <span style={styles.rfBadge}>
+            RF {(riskFreeRate * 100).toFixed(2)}% · BI RATE{rfEffective ? ` · EFF ${rfEffective}` : ''}
+          </span>
         </div>
       </header>
 

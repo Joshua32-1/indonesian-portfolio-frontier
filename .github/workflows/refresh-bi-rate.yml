@@ -49,14 +49,37 @@ jobs:
         working-directory: portfolio-app
         run: node data/refresh-bi-rate.js
 
+      - name: Note dry-run on non-default branch
+        if: github.ref != 'refs/heads/main'
+        run: echo "Ref is ${{ github.ref }}, not main — scraping and reporting only, no commit or dispatch." >> "$GITHUB_STEP_SUMMARY"
+
       # Close the gap between a rate move and the tracker: the Sunday rebalance would
       # otherwise leave the dashboard's Sharpe denominator up to six days stale.
+      # Coverage is the number that matters on a manual run: how far back BI's table
+      # actually reaches decides whether the backtest's dated r_f covers its window.
+      - name: Report coverage
+        run: |
+          node -e '
+            const c = require("./portfolio-app/data/bi-rate.json");
+            const h = c.history ?? [];
+            const line = h.length
+              ? `${h.length} decision(s), ${h[h.length-1].effective} → ${h[0].effective} (current ${(c.current*100).toFixed(2)}%)`
+              : "no history cached";
+            console.log("BI-Rate coverage: " + line);
+            const CUTOFF = "2012-01-01";
+            if (h.length && h[h.length-1].effective > CUTOFF)
+              console.log(`NOTE: series starts after the backtest cutoff ${CUTOFF} — rateAsOf flat-extends before that and the engine warns.`);
+          ' >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+
       - name: Sync r_f into portfolios.json
-        if: steps.scrape.outputs.changed == 'true'
+        if: steps.scrape.outputs.changed == 'true' && github.ref == 'refs/heads/main'
         run: node live-dashboard-portfolio/scripts/sync-risk-free-rate.mjs
 
+      # github.ref guard: HEAD is whatever ref was dispatched, so pushing HEAD:main from a
+      # feature branch would land that branch's commits on main. Scrape-and-report only there.
       - name: Commit & push if changed
-        if: steps.scrape.outputs.changed == 'true'
+        if: steps.scrape.outputs.changed == 'true' && github.ref == 'refs/heads/main'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -75,7 +98,7 @@ jobs:
       # moving the current rate at all. Both are rare (BI meets ~8x/year), so this costs
       # ~8 extra sweeps annually to keep the backtest honest between weekly runs.
       - name: Re-run backtest at the new rate
-        if: steps.scrape.outputs.backtest_stale == 'true'
+        if: steps.scrape.outputs.backtest_stale == 'true' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
