@@ -9,7 +9,11 @@
  *
  * Emit-artifact shape (the contract with optimize.mjs --emit):
  *   { "effective": "YYYY-MM-DD",
+ *     "riskFreeRate": <decimal>, "riskFreeRateEffective": "YYYY-MM-DD",
  *     "streams": { "<base>@<configTag>": { "TICKER": <fraction>, ... }, ... } }
+ *
+ * riskFreeRate is stamped onto portfolios.json so the dashboard scores Sharpe against
+ * the rate the weights were actually optimized at, not a hand-set constant.
  *
  * The emit files carry only the κ=0 target streams. For each appended κ=0 stream this
  * step SYNTHESIZES the 4 κ>0 variant rows (`<base>@<configTag>-k<KK>`) for the same
@@ -57,13 +61,19 @@ function priorRow(entry, effective) {
 let added = 0, skipped = 0, problems = 0;
 let latestEffective = portfolios.updated;
 
+// Each of the 10 matrix jobs scrapes BI independently, so they CAN disagree — one job
+// hitting the BI fallback while nine read live is the realistic case. Collect every
+// reported rate and take the mode rather than trusting whichever file sorts first.
+const rfVotes = [];
+
 for (const f of files) {
   let emit;
   try { emit = JSON.parse(readFileSync(f, 'utf8')); }
   catch (e) { console.error(`  FAIL  ${f} — unreadable: ${e.message}`); problems++; continue; }
-  const { effective, streams } = emit;
+  const { effective, streams, riskFreeRate, riskFreeRateEffective } = emit;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(effective || '')) { console.error(`  FAIL  ${f} — bad effective`); problems++; continue; }
   if (effective > latestEffective) latestEffective = effective;
+  if (Number.isFinite(riskFreeRate)) rfVotes.push({ rate: riskFreeRate, eff: riskFreeRateEffective ?? null });
 
   for (const [id, weights] of Object.entries(streams ?? {})) {
     const entry = byId.get(id);
@@ -91,6 +101,27 @@ for (const f of files) {
 }
 
 if (problems > 0) { console.error(`\n${problems} problem(s) — aborting without writing.`); process.exit(1); }
+
+// ── r_f stamp: modal rate across the config emits ────────────────────────────
+// Absent on older artifacts (pre-BI-Rate-plumbing) — leave the stored value alone in
+// that case rather than clobbering it with a guess.
+if (rfVotes.length) {
+  const tally = new Map();
+  for (const v of rfVotes) tally.set(v.rate, (tally.get(v.rate) ?? 0) + 1);
+  const [modalRate, votes] = [...tally.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (tally.size > 1) {
+    const spread = [...tally.entries()].map(([r, n]) => `${(r * 100).toFixed(2)}%\u00d7${n}`).join(', ');
+    console.warn(`  WARN  configs disagree on r_f (${spread}) — using the mode ${(modalRate * 100).toFixed(2)}%.`);
+  }
+  const modalEff = rfVotes.find(v => v.rate === modalRate)?.eff ?? null;
+  const prior = portfolios.riskFreeRate;
+  portfolios.riskFreeRate = modalRate;
+  if (modalEff) portfolios.riskFreeRateEffective = modalEff;
+  const note = prior === modalRate ? 'unchanged' : `was ${(prior * 100).toFixed(2)}%`;
+  console.log(`  r_f    ${(modalRate * 100).toFixed(2)}%${modalEff ? ` (eff. ${modalEff})` : ''} from ${votes}/${rfVotes.length} config(s) — ${note}`);
+} else {
+  console.warn('  WARN  no emit carried riskFreeRate — leaving the stored value untouched.');
+}
 
 portfolios.updated = latestEffective;
 writeFileSync(PORTFOLIOS, JSON.stringify(portfolios, null, 2) + '\n');
