@@ -1,0 +1,83 @@
+name: Refresh BI-Rate
+
+# Weekday scrape of Bank Indonesia's policy-rate table into portfolio-app/data/bi-rate.json,
+# the shared r_f cache all three apps resolve from.
+#
+# Why daily rather than weekly: the optimizer re-scrapes BI on every run, but the live
+# tracker and the backtest both read a committed value. Before this job, a rate move went
+# unnoticed by the forward test until the next Sunday rebalance and by the backtest until
+# its next weekly sweep. BI announces after its Board of Governors meeting (~14:00-15:00
+# WIB), so 09:00 UTC = 16:00 WIB catches a decision the same afternoon.
+#
+# COST: near zero. No npm install — the scraper uses only global fetch + fs. The script
+# writes ONLY when the rate or the decision history actually changed (a `generated`
+# timestamp bump alone is not a change), so this lands ~8 commits a year matching BI's
+# meeting calendar rather than ~250 no-op ones.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1-5'   # Weekdays 09:00 UTC = 16:00 WIB, after BI's announcement window
+  workflow_dispatch:
+
+# contents: commit the refreshed cache. actions: dispatch refresh-backtest.yml on a change.
+permissions:
+  contents: write
+  actions: write
+
+# Never let two refreshes race on a push to main.
+concurrency:
+  group: refresh-bi-rate
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No `npm ci` on purpose — refresh-bi-rate.js imports only ./bi-rate.js and node:fs.
+      - name: Scrape BI-Rate → bi-rate.json
+        id: scrape
+        working-directory: portfolio-app
+        run: node data/refresh-bi-rate.js
+
+      # Close the gap between a rate move and the tracker: the Sunday rebalance would
+      # otherwise leave the dashboard's Sharpe denominator up to six days stale.
+      - name: Sync r_f into portfolios.json
+        if: steps.scrape.outputs.changed == 'true'
+        run: node live-dashboard-portfolio/scripts/sync-risk-free-rate.mjs
+
+      - name: Commit & push if changed
+        if: steps.scrape.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add portfolio-app/data/bi-rate.json live-dashboard-portfolio/data/portfolios.json
+          if git diff --staged --quiet; then
+            echo "Nothing staged — skipping commit."
+            exit 0
+          fi
+          # Rebase onto latest main in case the daily snapshot commit landed since checkout.
+          git pull --rebase --autostash origin main
+          git commit -m "chore: refresh BI-Rate $(date -u +%Y-%m-%d)"
+          git push origin HEAD:main
+
+      # The backtest dates r_f per rebalance, so it goes stale on a new policy rate OR on
+      # newly captured history — the initial backfill re-dates years of steps without
+      # moving the current rate at all. Both are rare (BI meets ~8x/year), so this costs
+      # ~8 extra sweeps annually to keep the backtest honest between weekly runs.
+      - name: Re-run backtest at the new rate
+        if: steps.scrape.outputs.backtest_stale == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "r_f series changed (current ${{ steps.scrape.outputs.current }}, eff. ${{ steps.scrape.outputs.effective }}) — dispatching backtest refresh."
+          gh workflow run refresh-backtest.yml --ref main
