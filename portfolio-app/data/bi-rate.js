@@ -4,7 +4,7 @@
  * The definitive Bank Indonesia policy-rate (BI-Rate) source — the SINGLE SOURCE
  * OF TRUTH for r_f, imported by every app that needs a risk-free rate:
  *   • portfolio-app/data/fetch-snapshot.js            (optimizer snapshot)
- *   • portfolio-app/data/refresh-bi-rate.js           (weekday cron refresher)
+ *   • portfolio-app/data/refresh-bi-rate.js           (daily archive updater)
  *   • backtest-portfolio/scripts/fetch-backtest-history.mjs  (walk-forward history)
  *   • backtest-portfolio/src/backtestEngine.js        (dated per-rebalance r_f)
  *
@@ -17,13 +17,44 @@
  * bundler-safe. `fetch` is used only inside the network functions and is global in both
  * Node 20 and browsers. File I/O lives in the callers, which already do it.
  *
- * The companion cache `bi-rate.json` (committed, refreshed by refresh-bi-rate.js) holds
- * the parsed decision history so a stalled BI backend degrades to the last cron-verified
- * rate rather than a literal frozen at authoring time.
+ * ── THE ARCHIVE ─────────────────────────────────────────────────────────────
+ * `bi-rate.json` is the one file that holds the policy-rate history, and every app
+ * resolves r_f from it:
+ *
+ *   bi-rate-seed.js  (compiled history, 2011 → ~present)  ─┐
+ *   bi-rate.json     (rows captured by earlier runs)      ─┼─► buildArchive() ─► bi-rate.json
+ *   bi.go.id scrape  (whatever BI still renders)          ─┘
+ *
+ * Union, never replace: BI publishes only a rolling window, so a scrape that drops old
+ * rows must not shorten the archive. On a shared effective date the higher-ranked
+ * source wins (SOURCE_RANK), which is what lets a live scrape correct a compiled row.
+ *
+ * Consumers split by what they need:
+ *   • optimizer → `current` only (today's rate)
+ *   • backtest  → the whole `history` (each step scored at the rate in effect then)
+ *   • tracker   → `current` + `history`, so a forward-test row is scored at the rate
+ *                 in effect on its own date
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
+import { BI_RATE_SEED, INSTRUMENT_SWITCH_DATE, INSTRUMENT_LEGACY, INSTRUMENT_BI7DRR } from './bi-rate-seed.js';
+
+export { INSTRUMENT_SWITCH_DATE, INSTRUMENT_LEGACY, INSTRUMENT_BI7DRR };
+export { BI_RATE_SEED, SEED_REVIEW_FROM, SEED_PROVENANCE } from './bi-rate-seed.js';
+
 // ── Constants ────────────────────────────────────────────────────────────────
+
+/**
+ * Provenance of an archive row, lowest → highest precedence. A scrape straight from
+ * Bank Indonesia outranks a row compiled from public record, so the archive corrects
+ * itself the first time BI's table covers a date the seed also covers.
+ */
+export const SOURCE_COMPILED = 'compiled'; // bi-rate-seed.js
+export const SOURCE_IMPORTED = 'imported'; // operator-supplied file
+export const SOURCE_SCRAPED  = 'bi.go.id'; // live from Bank Indonesia
+
+const SOURCE_RANK = { [SOURCE_COMPILED]: 0, [SOURCE_IMPORTED]: 1, [SOURCE_SCRAPED]: 2 };
+const rankOf = (src) => SOURCE_RANK[src] ?? 0;
 
 /** Official Bank Indonesia BI-Rate table (English page; most-recent decision first). */
 export const BI_RATE_URL = 'https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx';
@@ -91,12 +122,104 @@ export function parseBIRateTable(html) {
     const rate = +(parseFloat(m[2]) / 100).toFixed(6);
     if (!Number.isFinite(rate) || rate < BI_RATE_MIN || rate > BI_RATE_MAX) continue;
     seen.add(effective);
-    rows.push({ effective, rate });
+    rows.push({ effective, rate, instrument: instrumentFor(effective), source: SOURCE_SCRAPED });
   }
 
   // The page is authored newest-first, but don't rely on it.
   rows.sort((a, b) => (a.effective < b.effective ? 1 : a.effective > b.effective ? -1 : 0));
   return rows;
+}
+
+// ── Archive assembly ─────────────────────────────────────────────────────────
+
+/**
+ * Which policy instrument was in force on a date. The 19 Aug 2016 switch from the legacy
+ * BI Rate to the BI 7-Day Reverse Repo Rate put a ~125 bp step in the spliced series that
+ * is an instrument change, not an easing decision — see bi-rate-seed.js.
+ */
+export function instrumentFor(isoDate) {
+  return isoDate < INSTRUMENT_SWITCH_DATE ? INSTRUMENT_LEGACY : INSTRUMENT_BI7DRR;
+}
+
+/** Drop malformed rows and fill in the tags older archives were written without. */
+function normalizeRow(row) {
+  if (!row || typeof row.effective !== 'string' || !Number.isFinite(row.rate)) return null;
+  return {
+    effective: row.effective,
+    rate: row.rate,
+    instrument: row.instrument ?? instrumentFor(row.effective),
+    source: row.source ?? SOURCE_COMPILED,
+  };
+}
+
+/**
+ * Union any number of decision lists into one archive, newest-first.
+ *
+ * UNION, NEVER REPLACE — BI renders only a rolling window of decisions, so a scrape that
+ * no longer shows 2019 must not delete 2019 from the archive. On a shared effective date
+ * the higher-ranked source wins; ties keep the later argument, so callers pass lists in
+ * increasing order of trust.
+ *
+ * @param {...({effective: string, rate: number, instrument?: string, source?: string}[]|null|undefined)} lists
+ * @returns {{effective: string, rate: number, instrument: string, source: string}[]} newest-first
+ */
+export function mergeHistory(...lists) {
+  const byDate = new Map();
+  for (const list of lists) {
+    for (const raw of list ?? []) {
+      const row = normalizeRow(raw);
+      if (!row) continue;
+      const prior = byDate.get(row.effective);
+      if (prior && rankOf(prior.source) > rankOf(row.source)) continue;
+      byDate.set(row.effective, row);
+    }
+  }
+  return [...byDate.values()].sort((a, b) => (a.effective < b.effective ? 1 : a.effective > b.effective ? -1 : 0));
+}
+
+/**
+ * Assemble the archive from every input, in increasing order of trust:
+ * compiled seed → rows already cached → whatever BI is serving now.
+ *
+ * @returns {{effective: string, rate: number, instrument: string, source: string}[]} newest-first
+ */
+export function buildArchive({ cached = null, scraped = null, imported = null } = {}) {
+  return mergeHistory(BI_RATE_SEED.map(r => ({ ...r, source: SOURCE_COMPILED })), cached, imported, scraped);
+}
+
+/**
+ * Describe what an archive actually covers — the numbers a caller needs to decide whether
+ * to trust a dated r_f, and what the refresh job prints to its run summary.
+ *
+ * `maxGapDays` is the load-bearing one: rateAsOf() holds a rate flat across a gap, so a
+ * long gap silently scores months of backtest steps at a stale rate. BI meets ~8x/year,
+ * so anything past ~120 days means decisions are missing rather than simply unchanged.
+ *
+ * @returns {{count: number, first: string|null, last: string|null, current: number|null,
+ *            bySource: Record<string, number>, maxGapDays: number, maxGapFrom: string|null,
+ *            maxGapTo: string|null}}
+ */
+export function archiveCoverage(history) {
+  const asc = ascending(history);
+  const bySource = {};
+  for (const r of asc) bySource[r.source ?? SOURCE_COMPILED] = (bySource[r.source ?? SOURCE_COMPILED] ?? 0) + 1;
+
+  let maxGapDays = 0, maxGapFrom = null, maxGapTo = null;
+  for (let i = 1; i < asc.length; i++) {
+    const gap = daysBetween(asc[i - 1].effective, asc[i].effective);
+    if (gap > maxGapDays) { maxGapDays = gap; maxGapFrom = asc[i - 1].effective; maxGapTo = asc[i].effective; }
+  }
+
+  return {
+    count: asc.length,
+    first: asc.length ? asc[0].effective : null,
+    last: asc.length ? asc[asc.length - 1].effective : null,
+    current: asc.length ? asc[asc.length - 1].rate : null,
+    bySource,
+    maxGapDays,
+    maxGapFrom,
+    maxGapTo,
+  };
 }
 
 // ── Pure lookups (used by the backtest engine, in-browser) ───────────────────
