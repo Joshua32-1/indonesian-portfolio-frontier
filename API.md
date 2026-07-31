@@ -25,7 +25,7 @@ Served as a static asset. In `portfolio-app`, Vite's `publicDir: 'data'` exposes
 {
   "generated": "2026-06-22T11:41:15.995Z",   // ISO timestamp of fetch
   "description": "IDX Large-Cap Live Snapshot — fetched from Yahoo Finance v3",
-  "riskFreeRate": 0.0575,                      // BI-Rate (decimal); scrape → bi-rate.json → 0.0575
+  "riskFreeRate": 0.0575,                      // BI-Rate (decimal); bi-rate.json archive → 0.0575
   "riskFreeRateEffective": "2026-06-18",       // BI decision date behind it; null if the literal fallback was used
   "historyRange": { "start": "2011-01-01", "end": "2026-06-19", "interval": "1wk" },
 
@@ -88,6 +88,10 @@ It holds a **methodology matrix × κ**: **300 streams = 10 configs × 6 strateg
                                  // stamped by merge-rebalances.mjs with the rate the weights were
                                  // optimized at, and by sync-risk-free-rate.mjs when BI moves midweek
   "riskFreeRateEffective": "2026-06-18",  // BI decision date behind that rate
+  "riskFreeRateSeries": [        // dated archive, newest-first — each daily row is scored at the
+    { "effective": "2026-06-18", "rate": 0.0575 },   // rate in effect ON THAT DAY, so a future BI
+    { "effective": "2025-09-17", "rate": 0.0475 }    // move never retroactively re-scores history.
+  ],                             // null ⇒ fall back to the scalar riskFreeRate (pre-archive behaviour)
   "portfolios": [
     {
       "id":          "max-sharpe@bl-cap-t03", // unique <base>@<configTag>[-k<KK>]
@@ -154,37 +158,61 @@ Capturing **weekly** (not just at each rebalance) keeps the *finest* replay grid
 | Source | Used by | What it provides |
 |--------|---------|------------------|
 | **Yahoo Finance v3** (`yahoo-finance2` npm) | both fetch scripts | weekly/daily `chart()` price history; `quoteSummary` modules: `financialData`, `summaryDetail`, `defaultKeyStatistics`, `assetProfile`, `summaryProfile` |
-| **Bank Indonesia BI-Rate** page | `portfolio-app/data/bi-rate.js` (used by both fetch scripts + `refresh-bi-rate.js`) | the **full** policy-rate decision history, scraped from `https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx`; each row validated to `[BI_RATE_MIN=0.01, BI_RATE_MAX=0.15]`. Resolution order: live scrape → committed `bi-rate.json` → `BI_RATE_FALLBACK=0.0575` |
+| **Bank Indonesia BI-Rate** page | `portfolio-app/data/refresh-bi-rate.js` **only** | the **full** policy-rate decision history, scraped from `https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx`; each row validated to `[BI_RATE_MIN=0.01, BI_RATE_MAX=0.15]`. Everything else reads the `bi-rate.json` archive instead of scraping — resolution is `bi-rate.json` → `BI_RATE_FALLBACK=0.0575` |
 
-### `portfolio-app/data/bi-rate.json` (generated cache)
+### `portfolio-app/data/bi-rate.json` (generated archive)
 
-The committed BI-Rate history — the fallback tier for every app. Written by `refresh-bi-rate.js`
-(weekday cron) and opportunistically by `fetch-snapshot.js` on a successful scrape. **Never
-hand-edit**; change the scraper instead. Written **only when the rate or history actually changes**,
-so it does not churn on no-op days.
+**The single file `r_f` comes from, anywhere in the monorepo.** Written by `refresh-bi-rate.js`,
+which unions three inputs in increasing order of trust:
+
+1. `bi-rate-seed.js` — compiled history back to 2011 (the span BI no longer renders)
+2. the rows already in `bi-rate.json` — **never dropped**
+3. a live `bi.go.id` scrape — outranks the other two on a shared date
+
+Plus an optional operator file: `node data/refresh-bi-rate.js --import rates.{json,csv}`.
+
+**Never hand-edit**; re-run the script or use `--import`. Written **only when the rate or history
+actually changes**, so it does not churn on no-op days.
 
 ```jsonc
 {
-  "generated": "2026-07-30T09:00:00.000Z",
+  "generated": "2026-07-31T09:00:00.000Z",
   "source":    "https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx",
+  "seed":      { "kind": "compiled", "reviewFrom": "2025-01-01", "instrumentSwitch": "2016-08-19", "note": "…" },
+  "coverage":  { "first": "2011-10-11", "last": "2026-06-18", "decisions": 50,
+                 "bySource": { "compiled": 50 }, "maxGapDays": 551 },
   "current":   0.0575,              // = history[0].rate
   "effective": "2026-06-18",        // = history[0].effective
   "history": [                      // NEWEST-FIRST; unioned across runs, never truncated
-    { "effective": "2026-06-18", "rate": 0.0575 },
-    { "effective": "2026-05-21", "rate": 0.06 }
+    { "effective": "2026-06-18", "rate": 0.0575, "instrument": "BI7DRR",         "source": "bi.go.id" },
+    { "effective": "2013-06-13", "rate": 0.06,   "instrument": "BI_RATE_LEGACY", "source": "compiled" }
   ]
 }
 ```
 
+- `instrument` — `BI_RATE_LEGACY` before `2016-08-19`, `BI7DRR` on/after. The ~125 bp step at that
+  date is a **policy-instrument change, not an easing decision** (see [ASSUMPTIONS.md](ASSUMPTIONS.md#-the-19-august-2016-instrument-change)).
+- `source` — `compiled` (from `bi-rate-seed.js`, **not** scraped) < `imported` < `bi.go.id`. Reconcile
+  compiled rows with `npm run verify-bi-rate`.
+- `coverage.maxGapDays` is the **longest hold**, not a defect: BI held 3.50% from Feb 2021 to Aug 2022.
+
+Consumers split by what they need: the **optimizer** reads `current`; the **backtest** and the
+**live tracker** read `history`.
+
 | Export (`bi-rate.js`) | Returns |
 |-----------------------|---------|
-| `parseBIRateTable(html)` | all `{effective, rate}` rows, newest-first; `[]` if none parse |
+| `parseBIRateTable(html)` | all `{effective, rate, instrument, source}` rows, newest-first; `[]` if none parse |
 | `fetchBIRateSeries()` | `{current, effective, history}`; **throws** on network/parse failure |
 | `fetchBIRate()` | latest rate as a bare decimal; never throws (falls back) |
 | `rateAsOf(history, isoDate)` | rate in effect **on or before** `isoDate` — never a later one (look-ahead guard). Flat-extends backwards before the series starts |
 | `meanRateOver(history, startISO, endISO)` | time-weighted mean across a window (display only) |
 | `makeRateLookup(history, constant)` | `(isoDate) => rate` with `.mode` of `'series'`/`'constant'`; no history ⇒ always `constant` |
 | `perPeriodRate(annual, ppy)` | `(1+annual)^(1/ppy) − 1` |
+| `mergeHistory(...lists)` | union of decision lists, newest-first. **Never drops rows.** Higher-ranked `source` wins a shared date: `bi.go.id` > `imported` > `compiled` |
+| `buildArchive({cached, scraped, imported})` | the assembled archive: seed ∪ cached ∪ imported ∪ scraped |
+| `archiveCoverage(history)` | `{count, first, last, current, bySource, maxGapDays, maxGapFrom, maxGapTo}` |
+| `instrumentFor(isoDate)` | `BI_RATE_LEGACY` before `2016-08-19`, else `BI7DRR` |
+| `BI_RATE_SEED`, `SEED_REVIEW_FROM`, `SEED_PROVENANCE` | re-exported from `bi-rate-seed.js` |
 
 The dashboard's daily fetch uses Yahoo `chart()` (not `historical()`) to avoid errors on unsettled recent bars.
 
@@ -315,7 +343,9 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 | `extractDailyReturns(series)` | Daily log-returns from an index series |
 | `calcAnnualizedReturn(series, dpy=252)` / `calcAnnualizedVol(dailyLogReturns, dpy=252)` | Annualized return / volatility |
 | `calcMaxDrawdown(series)` | Max peak-to-trough drawdown |
-| `calcSharpe(dailyLogReturns, riskFreeRate, dpy=252)` | Annualized Sharpe from per-period excess returns: `mean(e)/sd(e)·√dpy`, `e_t = (e^rp−1) − rf_daily`. Mirror of `sharpeFromExcess` in `portfolio-app/src/math/performance.js` — **keep in sync** |
+| `calcSharpe(dailyLogReturns, rfPeriod, dpy=252)` | Annualized Sharpe from per-period excess returns: `mean(e)/sd(e)·√dpy`, `e_t = (e^rp−1) − rf_t`. `rfPeriod` is a **scalar or one rate per return** (see `perPeriodRiskFree`); a short array holds its last value. Mirror of `sharpeFromExcess` in `portfolio-app/src/math/performance.js` — **keep in sync** |
+| `perPeriodRiskFree(dates, archive, fallbackAnnual, dpy=252)` | Per-period r_f aligned to a dated return series, from `portfolios.json → riskFreeRateSeries`. Returns a scalar when the archive is absent, so the pre-archive result is reproduced exactly |
+| `rateAsOf(archive, isoDate)` | The rate in effect **on** `isoDate` — never a later decision. Mirror of `rateAsOf` in `portfolio-app/data/bi-rate.js` — **keep in sync** |
 | `calcTrackingError(portfolioLogReturns, benchmarkLogReturns, dpy=252)` / `calcInfoRatio(annualizedExcessReturn, trackingError)` | Forward-test metrics vs IHSG |
 
 `priceAlign.js` provides `alignPriceSeries` (date alignment) used by the above. `attribution.js` provides `buildLiveAttribution(portfolio, assets, inception)` — per-holding contribution since inception.

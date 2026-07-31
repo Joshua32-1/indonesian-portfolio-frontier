@@ -13,19 +13,32 @@
 
 ## Risk-free rate
 
-- `r_f` = **Bank Indonesia BI-Rate**. Single source of truth: [`portfolio-app/data/bi-rate.js`](portfolio-app/data/bi-rate.js) (scrape + pure lookups) and the committed cache `portfolio-app/data/bi-rate.json`, refreshed weekdays by `refresh-bi-rate.yml`.
-- **Resolution order** wherever a rate is needed: live scrape → committed `bi-rate.json` → `BI_RATE_FALLBACK = 5.75%`. Parsed values are validated to `[1%, 15%]`. The cache tier means a stalled BI backend degrades to the last cron-verified rate rather than a literal frozen at authoring time.
+- `r_f` = **Bank Indonesia BI-Rate**. Single source of truth: the archive [`portfolio-app/data/bi-rate.json`](portfolio-app/data/bi-rate.json), assembled by `refresh-bi-rate.js` from [`bi-rate-seed.js`](portfolio-app/data/bi-rate-seed.js) (compiled history) + rows already archived + a live bi.go.id scrape, with the pure lookups in [`bi-rate.js`](portfolio-app/data/bi-rate.js).
+- **Every app READS the archive**; nothing else scrapes. Resolution wherever a rate is needed: `bi-rate.json` → `BI_RATE_FALLBACK = 5.75%`. Parsed values are validated to `[1%, 15%]`.
+- **Union, never replace.** BI renders only a rolling window of decisions, so a scrape that drops old rows must never shorten the archive. On a shared effective date the higher-ranked source wins: `bi.go.id` > `imported` > `compiled`, which is what lets a live scrape correct a compiled seed row.
 - The same `r_f` is used for Sharpe, the BL equilibrium, and the "probability below risk-free" tail metric.
+
+### ⚠️ The 19 August 2016 instrument change
+
+On **2016-08-19** Bank Indonesia replaced the old **BI Rate** (a 12-month reference rate, then 6.50%) with the **BI 7-Day Reverse Repo Rate** (BI7DRR, introduced at 5.25%) as its policy instrument. BI7DRR was renamed back to "BI-Rate" in 2024 — same instrument.
+
+The ~125 bp drop on that date is **an instrument change, not an easing decision**. Splicing the two into one policy-rate series is what BI, the BIS and the commercial vendors all publish, and it is what this archive does; every row carries `instrument` (`BI_RATE_LEGACY` / `BI7DRR`) so the join is visible. A backtest spanning 2012→today crosses it, so a step change in `r_f` there is expected and is not a data error.
+
+### ⚠️ Provenance of the pre-scrape history
+
+Rows tagged `source: "compiled"` come from [`bi-rate-seed.js`](portfolio-app/data/bi-rate-seed.js) and were **compiled from public record, not scraped from Bank Indonesia**. They exist because BI's table does not reach back to the 2012 backtest cutoff. They are the lowest-precedence input, so any scraped row for the same date overwrites them.
+
+**Reconcile before citing:** `cd portfolio-app && npm run verify-bi-rate` scrapes BI and prints a row-by-row agree/disagree/seed-only diff (needs network). `refresh-bi-rate.js` also warns whenever a scraped row contradicts the seed. Rows on/after `SEED_REVIEW_FROM = 2025-01-01` are the least certain.
 
 **Per app:**
 
-| App | What it uses | Refreshed by |
-|-----|--------------|--------------|
-| Optimizer | Latest rate, written into the snapshot as `riskFreeRate` (+ `riskFreeRateEffective`). Seeds the UI slider, which the analyst may override. | Every `fetch-snapshot` run — `predev`/`build`, so local dev is always live |
-| Live tracker | `portfolios.json → riskFreeRate`, stamped with the rate the weights were **actually optimized at** (modal value across the config emits) | `merge-rebalances.mjs` on Sunday; `sync-risk-free-rate.mjs` on any weekday the rate moves |
-| Backtest | A **dated series** — each rebalance is scored at the rate in effect on that date (`rateAsOf`), never at today's | `refresh-backtest.yml` weekly, plus a same-day dispatch when the weekday cron sees the series change |
+| App | What it uses | How it stays current |
+|-----|--------------|----------------------|
+| Optimizer | The **latest rate only** (`current`), written into the snapshot as `riskFreeRate` (+ `riskFreeRateEffective`). Seeds the UI slider, which the analyst may override. It has no time dimension — scenario returns are one-year-ahead draws — so there is no historical step to date a rate to. | `predev`/`build` refresh the archive, then read it. **No cron needed.** |
+| Backtest | The **whole dated series** — each rebalance is scored at the rate in effect on that date (`rateAsOf`), never today's. | `predev` refreshes the archive; the dev server also serves it live at `/bi-rate.json` so a running app picks up a move without a 3 MB refetch. **No cron needed.** |
+| Live tracker | `portfolios.json → riskFreeRate` **and `riskFreeRateSeries`**, so each daily row is scored at the rate in effect on its own date rather than being retroactively re-scored the next time BI moves. | It is deployed and builds from committed data, so it is the one consumer that must be **pushed** to: `sync-risk-free-rate.mjs`, called by the weekday `refresh-bi-rate.yml` cron. |
 
-- **Backtest coverage caveat:** if the scraped history starts after the backtest window does, `rateAsOf` flat-extends the oldest known rate backwards and the engine pushes a warning naming the uncovered span. Set `RISK_FREE_RATE=<decimal>` to force a flat rate instead.
+- **Backtest coverage caveat:** if the archive starts after the backtest window does, `rateAsOf` flat-extends the oldest known rate backwards and the engine pushes a warning naming the uncovered span. Set `RISK_FREE_RATE=<decimal>` to force a flat rate instead.
 
 ## Annualization
 

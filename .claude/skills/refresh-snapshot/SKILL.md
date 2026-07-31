@@ -30,11 +30,11 @@ Writes `live-dashboard-portfolio/data/live-market-snapshot.json`. CI already run
 ## After fetching — validate
 
 1. **It's valid JSON and non-trivial:** `node -e "const s=require('./data/live-market-snapshot.json'); console.log(s.assets.length, 'assets', s.generated)"` (adjust path).
-2. **Optimizer extras:** `riskFreeRate` is a sane decimal (≈0.0575 unless BI changed) and `riskFreeRateEffective` names the BI decision date. On a scrape failure you'll see `⚠️ BI-Rate fetch failed` followed by `↓ using cached …` — that's the committed `bi-rate.json` tier doing its job, not a problem. Only `↓ using fallback` means both live and cache were unavailable. Every asset has `meta` + `forwardEstimates`, `low ≤ mean ≤ high`.
+2. **Optimizer extras:** `riskFreeRate` is a sane decimal (≈0.0575 unless BI changed) and `riskFreeRateEffective` names the BI decision date. The rate is read from the `bi-rate.json` archive (refreshed by `predev`), not scraped here — only `↓ using fallback` means the archive was unreadable. Every asset has `meta` + `forwardEstimates`, `low ≤ mean ≤ high`.
 3. **Smoke-test the math** (optimizer only): `node scripts/validate-factors.mjs` should run clean against the new snapshot.
 4. **Report the diff**, not just success: which fields/prices moved, how many assets, the `generated` timestamp, and any tickers Yahoo failed to return.
 
 ## Notes
 
 - Never hand-edit the snapshot — re-run the script instead.
-- The fetch hits live external services (Yahoo, bi.go.id). If offline, the optimizer resolves r_f from the committed `bi-rate.json` cache (or 5.75% if that's missing too) but cannot get prices.
+- The fetch hits Yahoo for prices; r_f comes from the committed `bi-rate.json` archive (or 5.75% if unreadable). Offline you keep a correct r_f but cannot get prices.
