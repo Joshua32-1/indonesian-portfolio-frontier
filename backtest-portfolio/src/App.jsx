@@ -101,6 +101,12 @@ export default function App() {
   const refCacheRef = useRef({});            // prior → parsed JSON | null (missing) | 'loading'
   const [, setRefTick] = useState(0);        // bump to re-render when a lazy fetch lands
 
+  // Rebuild of the frozen reference artifact, driven by the dev server (vite.config.js
+  // spawns run-strategy-backtest.mjs so a UI rebuild and `npm run backtest` stay one code
+  // path). null until the first attempt; `unavailable` when not running under `npm run dev`.
+  const [gen, setGen] = useState(null); // { running, log[], exitCode, error, unavailable }
+  const genPollRef = useRef(null);
+
   const workerRef = useRef(null);
   const jobRef = useRef(0);             // monotonic job id source for ALL jobs (main + grid)
   const mainJobRef = useRef(0);         // id of the latest MAIN job (for display stale-guarding)
@@ -180,6 +186,68 @@ export default function App() {
       .catch(() => null)
       .then(j => { refCacheRef.current[refPrior] = j; setRefTick(t => t + 1); });
   }, [refPrior]);
+
+  // Drop the cached artifact for a prior and re-read it from disk. Cache-busted because the
+  // file was just overwritten at the same URL and the dev server will happily serve a 304.
+  const reloadReference = useCallback((prior) => {
+    refCacheRef.current[prior] = 'loading';
+    setRefTick(t => t + 1);
+    fetch(`${REF_FILE[prior]}?t=${Date.now()}`)
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then(j => { refCacheRef.current[prior] = j; setRefTick(t => t + 1); });
+  }, []);
+
+  // Poll the generator while a rebuild is in flight. The sweep runs for minutes, so this is
+  // a status poll rather than a stream; on a clean exit the fresh artifact is pulled in.
+  useEffect(() => {
+    if (!gen?.running) return undefined;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const s = await (await fetch('/__reference/status')).json();
+        if (stop) return;
+        setGen(g => ({ ...g, running: s.running, log: s.log ?? g.log, exitCode: s.exitCode }));
+        if (!s.running && s.exitCode === 0) reloadReference(refPrior);
+      } catch {
+        if (!stop) setGen(g => ({ ...g, running: false, error: 'Lost contact with the dev server.' }));
+      }
+    };
+    genPollRef.current = setInterval(tick, 1500);
+    tick();
+    return () => { stop = true; clearInterval(genPollRef.current); };
+  }, [gen?.running, refPrior, reloadReference]);
+
+  // Rebuild the reference artifact over the CURRENT universe selection, at the currently
+  // selected prior. Everything else (seed, paths, iterations, full κ-sweep, all three
+  // frequencies) stays at the script's defaults so the artifact keeps its citable fidelity.
+  const generateReference = async () => {
+    const universe = [...included];
+    if (universe.length < 2) return;
+    setGen({ running: true, log: ['Starting…'], exitCode: null, error: null });
+    try {
+      const res = await fetch('/__reference/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ universe, prior: refPrior }),
+      });
+      if (res.status === 404 || res.status === 405) {
+        // Not running under the dev server — the endpoint only exists in configureServer.
+        setGen({ running: false, log: [], exitCode: null, unavailable: true });
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setGen({ running: false, log: [], exitCode: null, error: body.error || `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      setGen({ running: false, log: [], exitCode: null, error: e.message });
+    }
+  };
+
+  const cancelReference = async () => {
+    try { await fetch('/__reference/cancel', { method: 'POST' }); } catch { /* the poll will notice */ }
+  };
 
   const toggle = t => setIncluded(prev => {
     const next = new Set(prev);
@@ -487,13 +555,31 @@ export default function App() {
       <div style={{ ...panel, marginTop: 16, borderColor: '#2A2150', background: '#120E26' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <SectionTitle>REFERENCE BACKTEST — frozen precompute (committed, seeded, full κ-sweep)</SectionTitle>
-          <Toggle label="Prior" value={refPrior} setValue={setRefPrior} options={PRIORS} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Toggle label="Prior" value={refPrior} setValue={setRefPrior} options={PRIORS} />
+            <button
+              onClick={gen?.running ? cancelReference : generateReference}
+              disabled={!gen?.running && included.size < 2}
+              title={gen?.running ? 'Stop the run; the artifact on disk is left alone' : `Rebuild this artifact over the ${included.size} selected names`}
+              style={{
+                ...runBtn, marginLeft: 0,
+                background: gen?.running ? '#7F1D1D' : '#7C3AED',
+                color: '#E2E8F0',
+                cursor: !gen?.running && included.size < 2 ? 'default' : 'pointer',
+                opacity: !gen?.running && included.size < 2 ? 0.5 : 1,
+              }}
+            >
+              {gen?.running ? 'Cancel' : `Regenerate (${included.size})`}
+            </button>
+          </div>
         </div>
         <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 4, lineHeight: 1.6 }}>
-          The auditable tearsheet generated offline by <code style={refCode}>npm run backtest</code> over the fixed
-          long-history core universe — <b>byte-reproducible</b> (fixed RNG seed) and higher-fidelity than the live
-          explorer above. It does <b>not</b> react to the universe toggle and updates only when the precompute is
-          deliberately re-run and committed. Use the explorer above for live "what-if" exploration; cite this.
+          The auditable tearsheet generated by <code style={refCode}>npm run backtest</code> — <b>byte-reproducible</b>{' '}
+          (fixed RNG seed) and higher-fidelity than the live explorer above. It does <b>not</b> react to the universe
+          toggle as you click; it changes only when deliberately rebuilt. Use the explorer for live "what-if";
+          cite this. <b>Regenerate</b> rebuilds it over your current selection — the dev server runs the same script,
+          so a rebuild here and one from the terminal are identical at the same seed. The result is written to{' '}
+          <code style={refCode}>public/{REF_FILE[refPrior].replace('/', '')}</code>; commit it to keep it.
         </div>
         {refProv && (
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline', marginTop: 10 }}>
@@ -501,7 +587,35 @@ export default function App() {
             <Stat label="SEED" value={refProv.seed != null ? String(refProv.seed) : '—'} sub="fixed ⇒ reproducible" />
             <Stat label="PATHS" value={refProv.paths != null ? String(refProv.paths) : '—'} sub="MC tail scenarios" />
             <Stat label="PRIOR" value={PRIOR_LABEL[refProv.priorMode] || refProv.priorMode || '—'} />
-            <Stat label="UNIVERSE" value={refProv.nTickers != null ? `${refProv.nTickers} names` : '—'} sub={refProv.start ? `${refProv.start} → ${refProv.end}` : undefined} />
+            <Stat
+              label="UNIVERSE"
+              value={refProv.nTickers != null ? `${refProv.nTickers} names` : '—'}
+              sub={refCurrent?.universeSelection?.mode === 'explicit'
+                ? 'chosen selection'
+                : refCurrent?.universeSelection?.listingCutoff
+                  ? `listed ≤ ${refCurrent.universeSelection.listingCutoff}`
+                  : (refProv.start ? `${refProv.start} → ${refProv.end}` : undefined)}
+            />
+            {refProv.start && <Stat label="WINDOW" value={`${refProv.start} → ${refProv.end}`} />}
+          </div>
+        )}
+
+        {gen?.unavailable && (
+          <div style={{ marginTop: 10, fontSize: 11, color: '#F59E0B' }}>
+            ⚠️ The generator endpoint only exists under <code style={refCode}>npm run dev</code> (it spawns a Node
+            process and writes into <code style={refCode}>public/</code>). From a built bundle, rebuild from a terminal:{' '}
+            <code style={refCode}>UNIVERSE={[...included].join(',')} PRIOR={refPrior} npm run backtest</code>
+          </div>
+        )}
+        {gen?.error && <div style={{ marginTop: 10, fontSize: 11, color: '#F87171' }}>⚠️ {gen.error}</div>}
+        {gen && !gen.unavailable && !gen.error && (gen.running || gen.exitCode != null) && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 10, color: gen.running ? '#A78BFA' : gen.exitCode === 0 ? '#10B981' : '#F87171', fontWeight: 700, marginBottom: 4 }}>
+              {gen.running
+                ? `Rebuilding over ${included.size} names — full sweep, minutes not seconds. Leaving this page does not stop it.`
+                : gen.exitCode === 0 ? 'Rebuilt — the panel below is the new artifact.' : `Generator exited ${gen.exitCode}.`}
+            </div>
+            <pre style={genLog}>{(gen.log || []).join('\n').trimEnd() || '…'}</pre>
           </div>
         )}
         <div style={{ marginTop: 12 }}>
@@ -566,6 +680,11 @@ const feeCard = { background: '#0A1A2E', border: '1px solid #122845', borderRadi
 const miniPanel = { background: '#0A1A2E', border: '1px solid #122845', borderRadius: 8, padding: '8px 8px 4px' };
 const miniTitle = { fontSize: 10, fontWeight: 700, color: '#9FB8CC', marginBottom: 2 };
 const miniPlaceholder = { height: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#46617B' };
+const genLog = {
+  background: '#08050F', border: '1px solid #2A2150', borderRadius: 6, padding: '8px 10px', margin: 0,
+  fontSize: 10, lineHeight: 1.5, color: '#9FB8CC', fontFamily: 'ui-monospace, monospace',
+  maxHeight: 220, overflow: 'auto', whiteSpace: 'pre-wrap',
+};
 
 function Shell({ children }) {
   return (

@@ -32,15 +32,51 @@ function main() {
     process.exit(1);
   }
 
-  // Restrict to the LONG-HISTORY core: the window starts at (newest listing + 1yr),
-  // so including recently-listed names (e.g. AADI 2024) would truncate the backtest to
-  // a few months. Names listed on/before LISTING_CUTOFF keep a ~15-year window.
+  // ── Universe ────────────────────────────────────────────────────────────────
+  // Two ways in, because universe.js is not frozen — names get added and removed, and the
+  // reference artifact has to be rebuildable over whatever the current selection is.
+  //
+  //   UNIVERSE=BBCA,BBRI,TLKM    explicit list (what the UI's Generate button sends)
+  //   (default)                  every name listed on/before LISTING_CUTOFF
+  //
+  // The default exists because the window starts at (newest listing + 1yr), so including a
+  // recently-listed name (e.g. AADI 2024) truncates the whole backtest to a few months.
+  // An explicit UNIVERSE is taken at face value — the caller chose it deliberately — but a
+  // short window is still reported so a surprising result is traceable to the selection.
   const LISTING_CUTOFF = process.env.LISTING_CUTOFF || '2012-01-01';
-  const universe = data.tickers.filter(t => t.listing && t.listing <= LISTING_CUTOFF).map(t => t.ticker);
-  const excluded = data.tickers.filter(t => !(t.listing && t.listing <= LISTING_CUTOFF)).map(t => t.ticker);
-  console.log(`🚀  Strategy backtest — ${universe.length} long-history names (listed ≤ ${LISTING_CUTOFF}), tail-aware machinery`);
+  const known = new Map(data.tickers.map(t => [t.ticker, t]));
+
+  let universe, excluded, selectionLabel;
+  if (process.env.UNIVERSE) {
+    const requested = process.env.UNIVERSE.split(',').map(s => s.trim().replace(/\.JK$/i, '')).filter(Boolean);
+    const unknown = requested.filter(t => !known.has(t));
+    if (unknown.length) {
+      console.error(`❌  Not in backtest-history.json: ${unknown.join(', ')}\n    Run \`npm run fetch\` if the universe changed.`);
+      process.exit(1);
+    }
+    universe = [...new Set(requested)];
+    excluded = data.tickers.filter(t => !universe.includes(t.ticker)).map(t => t.ticker);
+    selectionLabel = `explicit UNIVERSE (${universe.length} name(s))`;
+    const late = universe.filter(t => !(known.get(t).listing && known.get(t).listing <= LISTING_CUTOFF));
+    if (late.length) {
+      const newest = late.reduce((a, t) => (known.get(t).listing > a.listing ? known.get(t) : a), known.get(late[0]));
+      console.warn(`⚠️   ${late.length} name(s) listed after ${LISTING_CUTOFF}: ${late.join(', ')}`);
+      console.warn(`    The window starts one year after the newest listing (${newest.ticker} ${newest.listing}) — expect a short backtest.\n`);
+    }
+  } else {
+    universe = data.tickers.filter(t => t.listing && t.listing <= LISTING_CUTOFF).map(t => t.ticker);
+    excluded = data.tickers.filter(t => !(t.listing && t.listing <= LISTING_CUTOFF)).map(t => t.ticker);
+    selectionLabel = `${universe.length} long-history names (listed ≤ ${LISTING_CUTOFF})`;
+  }
+
+  if (universe.length < 2) {
+    console.error(`❌  Need at least 2 names; got ${universe.length}.`);
+    process.exit(1);
+  }
+
+  console.log(`🚀  Strategy backtest — ${selectionLabel}, tail-aware machinery`);
   console.log(`    included: ${universe.join(', ')}`);
-  console.log(`    excluded (too new): ${excluded.join(', ') || '(none)'}\n`);
+  console.log(`    excluded: ${excluded.join(', ') || '(none)'}\n`);
 
   // Defaults sized for a tractable offline run. Each frequency runs 4 variants + a
   // κ-sweep, so the full weekly+monthly+quarterly run is heavy (~40–60 min). Override
@@ -103,7 +139,16 @@ function main() {
     console.log(`    ${'IHSG'.padEnd(12)}: S(net)=${fb.metrics.IHSG.sharpe.toFixed(2)}`);
   }
 
-  const payload = { generated: new Date().toISOString(), universe, ...result };
+  // universeSelection lets the UI say WHY these names — an artifact regenerated from a UI
+  // selection and one built from the listing cutoff are both legitimate but not comparable.
+  const payload = {
+    generated: new Date().toISOString(),
+    universe,
+    universeSelection: process.env.UNIVERSE
+      ? { mode: 'explicit', count: universe.length }
+      : { mode: 'listingCutoff', listingCutoff: LISTING_CUTOFF, count: universe.length },
+    ...result,
+  };
   // Per-prior filename so cap/shrunk/equal runs don't clobber each other. The cap run keeps
   // the canonical name the UI loads by default; others get a -<prior> suffix. OUTFILE overrides
   // it — used by the sharded generate-reference-artifacts.mjs orchestrator for per-(prior,freq) shards.
