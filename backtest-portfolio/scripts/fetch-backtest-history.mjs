@@ -187,12 +187,26 @@ async function main() {
   if (process.argv.includes('--if-stale')) {
     try {
       const prior = JSON.parse(readFileSync(outPathEarly, 'utf8'));
-      if (prior.dailyEnd >= dailyEnd && prior.weeklyEnd >= weeklyEnd && prior.tickers?.length) {
-        console.log(`  ✅ up to date — ${prior.tickers.length} tickers through ${prior.dailyEnd} (last completed session). Skipping fetch.`);
+
+      // TWO ways to be stale, and the universe one is easy to forget: editing universe.js is
+      // the whole reason the ticker list is a single source of truth, so a new name must not
+      // be invisible until the next trading day just because prices happen to be current.
+      const want = TICKERS.map(t => t.replace('.JK', '')).sort();
+      const have = (prior.tickers ?? []).map(t => t.ticker).sort();
+      const added = want.filter(t => !have.includes(t));
+      const removed = have.filter(t => !want.includes(t));
+      const datesCurrent = prior.dailyEnd >= dailyEnd && prior.weeklyEnd >= weeklyEnd;
+
+      if (datesCurrent && !added.length && !removed.length && have.length) {
+        console.log(`  ✅ up to date — ${have.length} tickers through ${prior.dailyEnd} (last completed session). Skipping fetch.`);
         console.log(`     Force a refetch with \`npm run fetch\`.\n`);
         return;
       }
-      console.log(`  ↻ stale — have ${prior.dailyEnd}, last completed session is ${dailyEnd}. Refetching.\n`);
+      if (added.length || removed.length) {
+        console.log(`  ↻ universe changed${added.length ? ` — added ${added.join(', ')}` : ''}${removed.length ? ` — removed ${removed.join(', ')}` : ''}. Refetching.\n`);
+      } else {
+        console.log(`  ↻ stale — have ${prior.dailyEnd}, last completed session is ${dailyEnd}. Refetching.\n`);
+      }
     } catch {
       console.log('  ↻ no usable backtest-history.json — fetching.\n');
     }
