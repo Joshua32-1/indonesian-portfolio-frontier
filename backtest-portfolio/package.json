@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "fetch": "node scripts/fetch-backtest-history.mjs",
+    "fetch-if-stale": "node scripts/fetch-backtest-history.mjs --if-stale",
     "backtest": "node scripts/run-strategy-backtest.mjs",
     "refresh-bi-rate": "node ../portfolio-app/data/refresh-bi-rate.js",
-    "predev": "npm run refresh-bi-rate",
+    "predev": "npm run refresh-bi-rate && npm run fetch-if-stale",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

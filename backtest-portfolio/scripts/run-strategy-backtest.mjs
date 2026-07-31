@@ -17,7 +17,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { runStrategyBacktest } from '../src/backtestEngine.js';
+import { runStrategyBacktest, DEFAULT_WINDOW_START } from '../src/backtestEngine.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, '..', 'public');
@@ -32,6 +32,15 @@ function main() {
     process.exit(1);
   }
 
+  // ── Window ──────────────────────────────────────────────────────────────────
+  // The walk-forward starts no earlier than WINDOW_START, default 2016-08-19: the date Bank
+  // Indonesia replaced the legacy BI Rate (~6.50%) with the 7-Day Reverse Repo Rate (~5.25%).
+  // A window straddling it computes Sharpe against two different definitions of "risk-free"
+  // spliced together, with a ~125 bp step that is an instrument change rather than a policy
+  // move. WINDOW_START=none opts out and runs the full history.
+  const windowStartEnv = process.env.WINDOW_START;
+  const windowStart = windowStartEnv === 'none' ? null : (windowStartEnv || DEFAULT_WINDOW_START);
+
   // ── Universe ────────────────────────────────────────────────────────────────
   // Two ways in, because universe.js is not frozen — names get added and removed, and the
   // reference artifact has to be rebuildable over whatever the current selection is.
@@ -39,11 +48,16 @@ function main() {
   //   UNIVERSE=BBCA,BBRI,TLKM    explicit list (what the UI's Generate button sends)
   //   (default)                  every name listed on/before LISTING_CUTOFF
   //
-  // The default exists because the window starts at (newest listing + 1yr), so including a
-  // recently-listed name (e.g. AADI 2024) truncates the whole backtest to a few months.
-  // An explicit UNIVERSE is taken at face value — the caller chose it deliberately — but a
-  // short window is still reported so a surprising result is traceable to the selection.
-  const LISTING_CUTOFF = process.env.LISTING_CUTOFF || '2012-01-01';
+  // The default exists because the window also starts at (newest listing + 1yr), so including a
+  // recently-listed name (e.g. AADI 2024) truncates the whole backtest to a few months. An
+  // explicit UNIVERSE is taken at face value — the caller chose it deliberately — but a short
+  // window is still reported so a surprising result is traceable to the selection.
+  //
+  // The cutoff FOLLOWS the window (one year earlier, for the correlation lookback) rather than
+  // being pinned independently: with a 2016 window start, a name listed in 2015 has all the
+  // history it needs, and excluding it for being "too new" would be arbitrary.
+  const LISTING_CUTOFF = process.env.LISTING_CUTOFF
+    || (windowStart ? new Date(Date.parse(`${windowStart}T00:00:00Z`) - 365 * 86400000).toISOString().slice(0, 10) : '2012-01-01');
   const known = new Map(data.tickers.map(t => [t.ticker, t]));
 
   let universe, excluded, selectionLabel;
@@ -106,7 +120,7 @@ function main() {
   }
   const paths = num('PATHS', 100);
 
-  console.log(`    seed=${seed} | paths=${paths} | prior=${priorMode} | freqs=${frequencies.join(',')}\n`);
+  console.log(`    seed=${seed} | paths=${paths} | prior=${priorMode} | freqs=${frequencies.join(',')} | windowStart=${windowStart ?? 'none (full spliced history)'}\n`);
 
   const t0 = Date.now();
   const result = runStrategyBacktest(data, universe, {
@@ -119,6 +133,7 @@ function main() {
     optimizeMaxIter: num('MAXITER', 35),
     seed,
     priorMode,
+    windowStart,
   });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
 
@@ -129,7 +144,7 @@ function main() {
 
   for (const w of result.warnings) console.log(`  ⚠️  ${w}`);
   console.log(`\n  cost model: ${result.params.costModel} | prior: ${result.params.priorMode} (capMode ${result.params.capMode}) | seed: ${result.params.seed} | fixed κ=${result.params.kappa}`);
-  console.log(`  window: ${result.window.start} → ${result.window.end} | variants: ${result.params.variants.map(v => v.label).join(', ')}`);
+  console.log(`  window: ${result.window.start} → ${result.window.end} (bound by ${result.window.boundBy === 'windowStart' ? `windowStart ${result.window.windowStart}` : `newest listing ${result.window.newestListing} + 1yr`}) | variants: ${result.params.variants.map(v => v.label).join(', ')}`);
   const fmt = m => `S(net)=${m.sharpe.toFixed(2)} S(gr)=${m.grossSharpe.toFixed(2)} IR=${(m.infoRatio ?? 0).toFixed(2)} t=${(m.tStat ?? 0).toFixed(1)} MDD=${(m.maxDrawdown * 100).toFixed(0)}% turn=${m.annualTurnover.toFixed(1)}× drag=${(m.annualCostDrag * 100).toFixed(2)}%`;
   for (const [fk, fb] of Object.entries(result.byFrequency)) {
     console.log(`\n  ── ${fb.label} (${fb.nRebalances} rebalances) ──`);

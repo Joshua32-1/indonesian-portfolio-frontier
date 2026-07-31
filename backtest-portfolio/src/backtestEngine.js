@@ -36,10 +36,31 @@ import {
 import { findMinVariancePortfolio, optimizeTailAware } from '../../portfolio-app/src/math/monteCarlo.js';
 import { makeRng } from '../../portfolio-app/src/math/robustObjective.js';
 import { computeEquilibriumReturns, defaultDelta } from '../../portfolio-app/src/math/blackLitterman.js';
-import { makeRateLookup, meanRateOver, perPeriodRate, BI_RATE_FALLBACK } from '../../portfolio-app/data/bi-rate.js';
+import { makeRateLookup, meanRateOver, perPeriodRate, BI_RATE_FALLBACK, INSTRUMENT_SWITCH_DATE } from '../../portfolio-app/data/bi-rate.js';
 import { sharpeFromExcess } from '../../portfolio-app/src/math/performance.js';
 
 const CORR_WINDOW_DAYS = 365; // trailing 1-year weekly correlation window
+
+/**
+ * Earliest date the walk-forward is allowed to start, independent of listing dates.
+ *
+ * Defaults to the 2016-08-19 policy-instrument change: before it the policy rate was the
+ * legacy BI Rate (a 12-month reference, ~6.50%); on it Bank Indonesia switched to the
+ * 7-Day Reverse Repo Rate (~5.25%). A window that straddles the switch puts a ~125 bp step
+ * in r_f that is an instrument change, not a policy move — so every Sharpe spanning it is
+ * computed against two different definitions of "risk-free" spliced together.
+ *
+ * Starting here costs ~4.5 years of window and buys one consistent instrument throughout.
+ * Pass windowStart: null to opt out and run the full spliced history instead.
+ */
+export const DEFAULT_WINDOW_START = INSTRUMENT_SWITCH_DATE;
+
+/** Later of two ISO dates; tolerates either being null/empty. */
+function laterISO(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return a > b ? a : b;
+}
 
 // Unconstrained long-only optimizer constraints: a single synthetic 'ALL' sector capped at
 // 1.0 and a per-name cap of 1.0 → neither binds (historical default). runLiveStrategy builds
@@ -846,7 +867,7 @@ function attributionFor(included, weights, contexts) {
  * inputs (sharedCtx for buildStepContexts). Returns { ok:false, warnings } on bad input
  * rather than throwing.
  */
-function prepareStrategyInputs(data, includedTickers, volHalfLife) {
+function prepareStrategyInputs(data, includedTickers, volHalfLife, windowStart = DEFAULT_WINDOW_START) {
   const rf = data.riskFreeRate ?? BI_RATE_FALLBACK;
   // Dated r_f: each rebalance is scored at the policy rate in effect ON that date, so a
   // 2013 step never sees a rate BI had not set yet. Absent a series this collapses to the
@@ -875,7 +896,10 @@ function prepareStrategyInputs(data, includedTickers, volHalfLife) {
 
   const aligned = alignPriceSeries(included.map(a => ({ id: a.ticker, history: a.weekly })));
   const newestListing = included.reduce((mx, a) => (a.listing > mx ? a.listing : mx), included[0].listing);
-  const backtestStart = addCalendarDays(newestListing, CORR_WINDOW_DAYS);
+  // Whichever binds later: enough history for the correlation window, or the instrument floor.
+  const listingBound = addCalendarDays(newestListing, CORR_WINDOW_DAYS);
+  const backtestStart = laterISO(listingBound, windowStart);
+  const boundBy = windowStart && backtestStart === windowStart && windowStart > listingBound ? 'windowStart' : 'listing';
   const startIdx = aligned.findIndex(r => r.date >= backtestStart);
   const rebalanceRows = startIdx >= 0 ? aligned.slice(startIdx) : [];
   if (rebalanceRows.length < 12) {
@@ -889,17 +913,17 @@ function prepareStrategyInputs(data, includedTickers, volHalfLife) {
   });
   // Surface a short r_f series rather than burying it: rateAsOf flat-extends backwards, so
   // steps before the first captured decision are scored at the oldest known rate.
-  const windowStart = rebalanceRows[0].date;
+  const firstStep = rebalanceRows[0].date;
   const oldestDecision = rfAt.history[0]?.effective;
-  if (rfAt.mode === 'series' && oldestDecision && oldestDecision > windowStart) {
-    warnings.push(`r_f series starts ${oldestDecision}; steps from ${windowStart} use the oldest known rate (${(rfAt.history[0].rate * 100).toFixed(2)}%).`);
+  if (rfAt.mode === 'series' && oldestDecision && oldestDecision > firstStep) {
+    warnings.push(`r_f series starts ${oldestDecision}; steps from ${firstStep} use the oldest known rate (${(rfAt.history[0].rate * 100).toFixed(2)}%).`);
   } else if (rfAt.mode === 'constant') {
     warnings.push(`r_f is a single constant ${(rf * 100).toFixed(2)}% across the whole window (no dated series available).`);
   }
 
   const corrAssets = included.map(a => ({ ticker: a.ticker, priceHistory: a.weekly }));
   const sharedCtx = { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife, benchByKey, sharesOut, capMode, rf, rfAt };
-  return { ok: true, rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx };
+  return { ok: true, rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, windowStart: windowStart ?? null, boundBy, sharedCtx };
 }
 
 /**
@@ -923,11 +947,12 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     volHalfLife = DEFAULT_VOL_HALF_LIFE,
     seed = 12345,                   // fixed RNG seed ⇒ byte-reproducible + common random numbers
     priorMode = 'cap',              // BL-equilibrium prior weights: 'cap' | 'shrunk' | 'equal'
+    windowStart = DEFAULT_WINDOW_START, // earliest walk-forward step; null ⇒ listing-bound only
   } = opts;
 
-  const prep = prepareStrategyInputs(data, includedTickers, volHalfLife);
+  const prep = prepareStrategyInputs(data, includedTickers, volHalfLife, windowStart);
   if (!prep.ok) return { ok: false, warnings: prep.warnings };
-  const { rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx } = prep;
+  const { rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, windowStart: appliedWindowStart, boundBy, sharedCtx } = prep;
 
   const byFrequency = {};
   let lookAheadAny = null;
@@ -1007,7 +1032,7 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     },
     window: {
       start: rebalanceRows[0]?.date, end: rebalanceRows[rebalanceRows.length - 1]?.date,
-      newestListing, nTickers: included.length,
+      newestListing, windowStart: appliedWindowStart, boundBy, nTickers: included.length,
       ...rfWindowStats(rfAt, rf, rebalanceRows[0]?.date, rebalanceRows[rebalanceRows.length - 1]?.date),
     },
     byFrequency,

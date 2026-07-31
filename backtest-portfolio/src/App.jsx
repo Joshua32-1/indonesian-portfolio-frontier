@@ -6,9 +6,17 @@ import WeightsHistoryChart from './components/WeightsHistoryChart.jsx';
 import AttributionTable from './components/AttributionTable.jsx';
 import StrategyBacktest from './components/StrategyBacktest.jsx';
 
-// Names listed on/before this date form the "Long history" preset — recent IPOs bind the
-// walk-forward window to a few weeks, so this preset gives the machinery a meaningful window.
-const LONG_HISTORY_CUTOFF = '2012-01-01';
+// The walk-forward starts no earlier than this: the date Bank Indonesia replaced the legacy
+// BI Rate (~6.50%) with the 7-Day Reverse Repo Rate (~5.25%). A window straddling it computes
+// Sharpe against two spliced definitions of "risk-free". Mirrors DEFAULT_WINDOW_START in the
+// engine — kept as a literal here because this file is UI, not math.
+const WINDOW_START = '2016-08-19';
+
+// Names listed on/before this date form the "Long history" preset. It FOLLOWS the window start
+// (one year earlier, for the correlation lookback) rather than being pinned independently: a
+// name listed in 2015 has all the history a 2016-start window needs, and a recent IPO would
+// bind the window to a few weeks.
+const LONG_HISTORY_CUTOFF = '2015-08-19';
 
 const LAMBDAS = [0.1, 0.25, 0.35, 0.5];
 const FREQ_OPTS = [
@@ -38,8 +46,10 @@ const GRID_PATHS = 40;
 const GRID_ITER = 12;
 const PRIOR_LABEL = { cap: 'Market-cap', shrunk: 'Shrunk', equal: 'Equal' };
 
-// Frozen "Reference backtest" precompute artifacts (npm run backtest), one file per prior.
-// The cap run keeps the canonical filename; shrunk/equal get a -<prior> suffix.
+// "Reference backtest" precompute artifacts (npm run backtest / the Regenerate button), one
+// file per prior. The cap run keeps the canonical filename; shrunk/equal get a -<prior> suffix.
+// LOCAL AND GITIGNORED — not committed, and not built by CI. A fresh clone has none until you
+// generate one, which is the point: it always reflects a universe you chose.
 const REF_FILE = { cap: '/backtest-results.json', shrunk: '/backtest-results-shrunk.json', equal: '/backtest-results-equal.json' };
 
 // Cache key includes the fidelity (paths / iters) so reduced-fidelity grid cells never collide
@@ -94,9 +104,9 @@ export default function App() {
   const [gridProgress, setGridProgress] = useState(null); // { done, total }
   const [gridMeta, setGridMeta] = useState(null);         // { frequency } the grid was generated at
 
-  // Frozen "Reference backtest" precompute (committed JSON), with a per-prior selector.
+  // "Reference backtest" precompute (local, gitignored JSON), with a per-prior selector.
   // Distinct from the live explorer above: this is the high-fidelity, seeded, citable artifact —
-  // it updates only on a deliberate `npm run backtest` + commit, and is fixed to the core universe.
+  // it changes only when you rebuild it, over a universe you picked.
   const [refPrior, setRefPrior] = useState('cap');
   const refCacheRef = useRef({});            // prior → parsed JSON | null (missing) | 'loading'
   const [, setRefTick] = useState(0);        // bump to re-render when a lazy fetch lands
@@ -337,7 +347,7 @@ export default function App() {
             </span>
           </div>
           <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-            <button onClick={selectLongHistory} style={miniBtn} title="Names listed on/before 2012 — longest window">Long history</button>
+            <button onClick={selectLongHistory} style={miniBtn} title={`Names listed on/before ${LONG_HISTORY_CUTOFF} — full window from ${WINDOW_START}`}>Long history</button>
             <button onClick={selectAll} style={miniBtn}>All</button>
             <button onClick={selectNone} style={miniBtn}>None</button>
           </div>
@@ -408,7 +418,11 @@ export default function App() {
                 <Stat label="WINDOW" value={`${w.start} → ${w.end}`} />
                 <Stat label="REBALANCES" value={`${w.nRebalances} (${result.frequency})`} />
                 <Stat label="NAMES" value={`${w.nTickers}`} />
-                <Stat label="WINDOW BOUND BY" value={w.newestListing} sub="newest listing + 1yr" />
+                <Stat
+                  label="WINDOW BOUND BY"
+                  value={w.boundBy === 'windowStart' ? (w.windowStart ?? WINDOW_START) : w.newestListing}
+                  sub={w.boundBy === 'windowStart' ? 'BI7DRR instrument switch' : 'newest listing + 1yr'}
+                />
                 <Stat
                   label="r_f"
                   value={`${(w.riskFreeRate * 100).toFixed(2)}%`}
@@ -554,7 +568,7 @@ export default function App() {
           the live explorer above — this is the citable tearsheet, not a live recompute. */}
       <div style={{ ...panel, marginTop: 16, borderColor: '#2A2150', background: '#120E26' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <SectionTitle>REFERENCE BACKTEST — frozen precompute (committed, seeded, full κ-sweep)</SectionTitle>
+          <SectionTitle>REFERENCE BACKTEST — high-fidelity precompute (local, seeded, full κ-sweep)</SectionTitle>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Toggle label="Prior" value={refPrior} setValue={setRefPrior} options={PRIORS} />
             <button
@@ -574,12 +588,13 @@ export default function App() {
           </div>
         </div>
         <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 4, lineHeight: 1.6 }}>
-          The auditable tearsheet generated by <code style={refCode}>npm run backtest</code> — <b>byte-reproducible</b>{' '}
-          (fixed RNG seed) and higher-fidelity than the live explorer above. It does <b>not</b> react to the universe
-          toggle as you click; it changes only when deliberately rebuilt. Use the explorer for live "what-if";
-          cite this. <b>Regenerate</b> rebuilds it over your current selection — the dev server runs the same script,
-          so a rebuild here and one from the terminal are identical at the same seed. The result is written to{' '}
-          <code style={refCode}>public/{REF_FILE[refPrior].replace('/', '')}</code>; commit it to keep it.
+          The auditable tearsheet — <b>byte-reproducible</b> (fixed RNG seed), full κ-sweep across all three
+          frequencies, higher-fidelity than the live explorer above. It does <b>not</b> react to the universe toggle
+          as you click; it changes only when you rebuild it. Use the explorer for live "what-if"; cite this.
+          {' '}<b>Regenerate</b> rebuilds it over your current selection — the dev server runs the same{' '}
+          <code style={refCode}>npm run backtest</code> script, so a rebuild here and one from a terminal are
+          identical at the same seed. Written to <code style={refCode}>public/{REF_FILE[refPrior].replace('/', '')}</code>,
+          which is <b>gitignored and local</b> — nothing regenerates it behind your back.
         </div>
         {refProv && (
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline', marginTop: 10 }}>
@@ -621,7 +636,16 @@ export default function App() {
         <div style={{ marginTop: 12 }}>
           {refLoading
             ? <div style={{ fontSize: 12, color: '#5B7A95' }}>Loading reference backtest…</div>
-            : <StrategyBacktest results={refCurrent} />}
+            : refCurrent
+              ? <StrategyBacktest results={refCurrent} />
+              : (
+                <div style={{ fontSize: 11, color: '#F59E0B', lineHeight: 1.7 }}>
+                  No artifact for the <b>{PRIOR_LABEL[refPrior]}</b> prior yet — these are local and gitignored, so a
+                  fresh clone starts without one. Pick your universe on the left, then hit{' '}
+                  <b>Regenerate ({included.size})</b> above. The full sweep takes minutes; from a terminal it is{' '}
+                  <code style={refCode}>PRIOR={refPrior} npm run backtest</code>.
+                </div>
+              )}
         </div>
       </div>
     </Shell>

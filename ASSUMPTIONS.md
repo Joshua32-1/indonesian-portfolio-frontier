@@ -22,7 +22,11 @@
 
 On **2016-08-19** Bank Indonesia replaced the old **BI Rate** (a 12-month reference rate, then 6.50%) with the **BI 7-Day Reverse Repo Rate** (BI7DRR, introduced at 5.25%) as its policy instrument. BI7DRR was renamed back to "BI-Rate" in 2024 — same instrument.
 
-The ~125 bp drop on that date is **an instrument change, not an easing decision**. Splicing the two into one policy-rate series is what BI, the BIS and the commercial vendors all publish, and it is what this archive does; every row carries `instrument` (`BI_RATE_LEGACY` / `BI7DRR`) so the join is visible. A backtest spanning 2012→today crosses it, so a step change in `r_f` there is expected and is not a data error.
+The ~125 bp drop on that date is **an instrument change, not an easing decision**. The archive splices them — as BI, the BIS and the commercial vendors all do — and every row carries `instrument` (`BI_RATE_LEGACY` / `BI7DRR`) so the join is visible.
+
+**The backtest does not span the splice.** `DEFAULT_WINDOW_START = 2016-08-19` floors the walk-forward at the switch, so every step in a run is scored against the same instrument. Otherwise a Sharpe computed over 2012→today divides by two different definitions of "risk-free" glued together. Measured cost: the window shortens from ~14.5y to ~10y, and the r_f range narrows from 3.50–7.75% to **3.50–6.25%**.
+
+The listing cutoff **follows** the window start (one year earlier, for the correlation lookback) rather than being pinned independently — with a 2016 start, a name listed in 2015 has all the history it needs, so excluding it would be arbitrary. Override with `WINDOW_START=none npm run backtest` for the full spliced history, or `WINDOW_START=YYYY-MM-DD`.
 
 ### ⚠️ Provenance of the pre-scrape history
 

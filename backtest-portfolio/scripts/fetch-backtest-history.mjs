@@ -174,11 +174,31 @@ async function fetchSharesOut(ticker) {
 async function main() {
   console.log('🚀  Backtest history fetch — Yahoo Finance v3\n');
 
-  const riskFree = resolveRiskFree();
-
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
   const dailyEnd = lastCompletedTradingDayISO(now);
+
+  // `npm run dev` runs this on every start (predev), and a full refetch is ~20 names ×
+  // (daily + weekly + quoteSummary). --if-stale makes that cheap: if the file on disk already
+  // covers the last completed session there are no new bars to get, so skip it. Checking the
+  // bar we WOULD fetch beats a wall-clock TTL — it is exact, and it never re-fetches on a
+  // weekend or a holiday when nothing new exists.
+  const outPathEarly = join(__dirname, '..', 'public', 'backtest-history.json');
+  if (process.argv.includes('--if-stale')) {
+    try {
+      const prior = JSON.parse(readFileSync(outPathEarly, 'utf8'));
+      if (prior.dailyEnd >= dailyEnd && prior.weeklyEnd >= weeklyEnd && prior.tickers?.length) {
+        console.log(`  ✅ up to date — ${prior.tickers.length} tickers through ${prior.dailyEnd} (last completed session). Skipping fetch.`);
+        console.log(`     Force a refetch with \`npm run fetch\`.\n`);
+        return;
+      }
+      console.log(`  ↻ stale — have ${prior.dailyEnd}, last completed session is ${dailyEnd}. Refetching.\n`);
+    } catch {
+      console.log('  ↻ no usable backtest-history.json — fetching.\n');
+    }
+  }
+
+  const riskFree = resolveRiskFree();
   const chartEnd = addCalendarDays(jakartaISO(now), 1); // period2 is exclusive-ish
 
   const tickers = [];
