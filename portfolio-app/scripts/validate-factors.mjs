@@ -9,6 +9,7 @@ import { computeCorrelationFromDateRange, computeCovarianceMatrix } from '../src
 import { runMonteCarloSimulation, pertSample } from '../src/math/monteCarlo.js';
 import { DEFAULT_FACTOR_CONFIG } from '../src/math/factorConfig.js';
 import { computeFactorPreview } from '../src/math/qualityFactors.js';
+import { sharpeFromExcess, excessReturns } from '../src/math/performance.js';
 import {
   computeEquilibriumReturns,
   buildBlackLittermanContext,
@@ -207,6 +208,56 @@ console.log('\n─── Black-Litterman units ───────────
   });
   check('τ fallback is 0.03 (DEFAULT_FACTOR_CONFIG)', ctxDefault.tau === 0.03,
     `got ${ctxDefault.tau}`);
+}
+
+// ── Sharpe estimator (performance.js) ─────────────────────────────────────
+// Canonical for the monorepo: the backtester imports it, the dashboard mirrors it.
+console.log('\n─── Sharpe estimator ────────────────────────────────────────');
+{
+  const ppy = 52;
+  const rets = Array.from({ length: 520 }, (_, i) => 0.004 + 0.02 * Math.sin(i * 1.7));
+  const rfAnnual = 0.0575;
+  const rfP = Math.pow(1 + rfAnnual, 1 / ppy) - 1;
+
+  const e = excessReturns(rets, rfP);
+  check('excessReturns subtracts a scalar per period', Math.abs(e[0] - (rets[0] - rfP)) < 1e-15);
+
+  const perPeriod = rets.map(() => rfP);
+  check('array and scalar r_f agree when the array is flat',
+    Math.abs(sharpeFromExcess(rets, perPeriod, ppy) - sharpeFromExcess(rets, rfP, ppy)) < 1e-12);
+
+  const m = e.reduce((s, v) => s + v, 0) / e.length;
+  const sd = Math.sqrt(e.reduce((s, x) => s + (x - m) ** 2, 0) / (e.length - 1));
+  check('Sharpe = mean(e)/sd(e)·√ppy',
+    Math.abs(sharpeFromExcess(rets, rfP, ppy) - (m / sd) * Math.sqrt(ppy)) < 1e-12);
+
+  // A dated r_f must actually bite: a higher rate late in the window lowers Sharpe.
+  const rising = rets.map((_, i) => (i < 260 ? rfP : rfP * 2));
+  check('a rising dated r_f lowers Sharpe', sharpeFromExcess(rets, rising, ppy) < sharpeFromExcess(rets, rfP, ppy));
+
+  // Degenerate inputs must not produce NaN/Infinity in the UI.
+  check('flat series → 0 (no divide-by-zero)', sharpeFromExcess([0.01, 0.01, 0.01], 0.001, ppy) === 0);
+  check('too-short series → 0', sharpeFromExcess([0.01], 0.001, ppy) === 0);
+  check('ppy = 0 → 0', sharpeFromExcess(rets, rfP, 0) === 0);
+
+  // DENOMINATOR INVARIANCE. Subtracting a CONSTANT per-period rate cannot change a
+  // standard deviation, so with a flat r_f the Sharpe denominator is exactly the annVol
+  // still displayed in the UI. Only the NUMERATOR changed (geometric CAGR → mean excess).
+  const sdRaw = Math.sqrt(rets.reduce((s, x, _i, a) => {
+    const mm = a.reduce((q, v) => q + v, 0) / a.length;
+    return s + (x - mm) ** 2;
+  }, 0) / (rets.length - 1));
+  check('flat r_f leaves the denominator equal to annVol',
+    Math.abs(sd * Math.sqrt(ppy) - sdRaw * Math.sqrt(ppy)) < 1e-12);
+
+  // r_f enters ONLY through the mean, so Sharpe falls monotonically as the rate rises.
+  const s0 = sharpeFromExcess(rets, 0, ppy);
+  const s1 = sharpeFromExcess(rets, rfP, ppy);
+  const s2 = sharpeFromExcess(rets, rfP * 2, ppy);
+  check('Sharpe is monotonically decreasing in r_f', s0 > s1 && s1 > s2,
+    `${s0.toFixed(4)} > ${s1.toFixed(4)} > ${s2.toFixed(4)}`);
+  check('r_f = 0 reduces to mean/sd·√ppy',
+    Math.abs(s0 - (rets.reduce((a, b) => a + b, 0) / rets.length) / sdRaw * Math.sqrt(ppy)) < 1e-12);
 }
 
 console.log(`\n═══ Result: ${pass} passed, ${fail} failed ═══`);

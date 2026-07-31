@@ -58,6 +58,16 @@ function main() {
     : undefined; // → engine default (Max-Sharpe + λ 0.25/0.5/1.0)
   const seed = process.env.SEED != null ? Number(process.env.SEED) : 12345; // fixed ⇒ reproducible
   const priorMode = process.env.PRIOR || 'cap';                              // 'cap' | 'shrunk' | 'equal'
+
+  // RISK_FREE_RATE re-scores at a flat rate without a 3 MB refetch — drops the dated series
+  // so every step sees the same r_f (reproducing a pre-series result, or a sensitivity pass).
+  if (process.env.RISK_FREE_RATE) {
+    const rate = Number(process.env.RISK_FREE_RATE);
+    if (!Number.isFinite(rate)) { console.error(`RISK_FREE_RATE="${process.env.RISK_FREE_RATE}" is not a number.`); process.exit(1); }
+    data.riskFreeRate = rate;
+    data.riskFreeRateSeries = null;
+    console.log(`    r_f overridden \u2192 flat ${(rate * 100).toFixed(2)}% (dated series dropped)\n`);
+  }
   const paths = num('PATHS', 100);
 
   console.log(`    seed=${seed} | paths=${paths} | prior=${priorMode} | freqs=${frequencies.join(',')}\n`);

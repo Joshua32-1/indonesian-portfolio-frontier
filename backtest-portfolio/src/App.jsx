@@ -341,7 +341,14 @@ export default function App() {
                 <Stat label="REBALANCES" value={`${w.nRebalances} (${result.frequency})`} />
                 <Stat label="NAMES" value={`${w.nTickers}`} />
                 <Stat label="WINDOW BOUND BY" value={w.newestListing} sub="newest listing + 1yr" />
-                <Stat label="r_f" value={`${(w.riskFreeRate * 100).toFixed(2)}%`} sub="BI-Rate" />
+                <Stat
+                  label="r_f"
+                  value={`${(w.riskFreeRate * 100).toFixed(2)}%`}
+                  sub={w.riskFreeRateMode === 'series'
+                    ? `BI-Rate · window avg${w.riskFreeRateRange && w.riskFreeRateRange.min !== w.riskFreeRateRange.max
+                        ? ` (${(w.riskFreeRateRange.min * 100).toFixed(2)}–${(w.riskFreeRateRange.max * 100).toFixed(2)}%)` : ''}`
+                    : 'BI-Rate · flat'}
+                />
                 <Stat label="COST MODEL" value={w.costModel} />
               </div>
               {result.warnings?.length > 0 && (

@@ -61,6 +61,11 @@ import CorrelationExplorer from './components/CorrelationExplorer.jsx';
 const DEFAULT_MC_ITERATIONS = 100000;
 const MIN_MC_ITERATIONS     = 1000;
 const MAX_MC_ITERATIONS     = 100000;
+// Last-resort only. The slider is seeded from the snapshot's riskFreeRate on mount, and
+// `predev`/`build` re-run fetch-snapshot, so a local session always starts at the live
+// BI-Rate. This literal is reached only if the snapshot somehow lacks the field.
+// Source of truth for the rate itself: data/bi-rate.js (BI_RATE_FALLBACK) + bi-rate.json.
+// Not imported here on purpose — data/ is Vite's publicDir and must not be bundled from.
 const DEFAULT_RF            = 0.0575;
 const MIN_RF                = 0;
 const MAX_RF                = 0.15;

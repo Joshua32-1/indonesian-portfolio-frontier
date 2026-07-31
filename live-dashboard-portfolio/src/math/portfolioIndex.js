@@ -270,13 +270,38 @@ export function calcMaxDrawdown(series) {
 }
 
 /**
- * Sharpe ratio: (annReturn - riskFreeRate) / annVol.
- * Both inputs must be annualized decimals.
+ * Annualized Sharpe from PER-PERIOD excess returns:
+ *
+ *     rf_d = (1 + rf_annual)^(1/252) \u2212 1
+ *     e_t  = r_t \u2212 rf_d
+ *     Sharpe = mean(e_t) / std(e_t) \u00d7 \u221a252
+ *
+ * MIRROR of sharpeFromExcess in portfolio-app/src/math/performance.js — kept local
+ * because this app's Vercel build root is live-dashboard-portfolio/ and cannot import
+ * across the repo (CLAUDE.md: shared data contracts, not shared code). KEEP IN SYNC:
+ * a divergence makes the forward test and the backtest quietly incomparable, which is
+ * the one comparison both exist to support. See that file for why this replaced
+ * (annReturn \u2212 rf)/annVol — in short, the old form structurally cannot express an r_f
+ * that moves inside the window, and is not the Sharpe ratio as defined.
+ *
+ * `dailyLogReturns` are converted to SIMPLE returns first: subtracting a simple rf from
+ * a log return mixes conventions and shifts the mean by \u2248\u03c3\u00b2/2.
+ *
+ * @param {number[]} dailyLogReturns  the `rp` series (weighted log returns)
+ * @param {number}   riskFreeRate     ANNUAL decimal
+ * @param {number}   dpy
  * @returns {number|null}
  */
-export function calcSharpe(annReturn, annVol, riskFreeRate) {
-  if (annReturn == null || annVol == null || !annVol || !isFinite(annVol)) return null;
-  return (annReturn - riskFreeRate) / annVol;
+export function calcSharpe(dailyLogReturns, riskFreeRate, dpy = 252) {
+  if (!Array.isArray(dailyLogReturns) || dailyLogReturns.length < 2) return null;
+  const rfDaily = Math.pow(1 + (riskFreeRate ?? 0), 1 / dpy) - 1;
+  const excess = dailyLogReturns.map(r => (Math.exp(r) - 1) - rfDaily);
+  const n = excess.length;
+  const m = excess.reduce((s, v) => s + v, 0) / n;
+  // Sample (n\u22121), matching portfolio-app/src/math/performance.js.
+  const sd = Math.sqrt(Math.max(0, excess.reduce((s, x) => s + (x - m) * (x - m), 0) / (n - 1)));
+  if (!(sd > 0) || !isFinite(sd)) return null;
+  return (m / sd) * Math.sqrt(dpy);
 }
 
 /**

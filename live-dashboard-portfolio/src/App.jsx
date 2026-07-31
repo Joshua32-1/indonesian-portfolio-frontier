@@ -369,7 +369,7 @@ export default function App() {
         annReturn:     annRet,
         annVol,
         maxDrawdown:   calcMaxDrawdown(series),
-        sharpe:        calcSharpe(annRet, annVol, riskFreeRate),
+        sharpe:        calcSharpe(dailyRets, riskFreeRate),
         trackingError: te,
         infoRatio:     calcInfoRatio(excess, te),
       };
@@ -600,7 +600,9 @@ export default function App() {
           </table>
         </div>
         <div style={{ marginTop: 8, fontSize: 9, color: TEXT_DIM }}>
-          Sharpe = (ann. return − {((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}% BI-Rate) / ann. vol ·
+          Sharpe = mean(daily excess) / sd(daily excess) × √252, excess vs {((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}% BI-Rate
+          {portfoliosData?.riskFreeRateEffective ? ` (eff. ${portfoliosData.riskFreeRateEffective})` : ''} ·
+          {' '}not reconstructible from the ann. return and ann. vol columns (those stay geometric) ·
           {net ? ' net = gross − IDX turnover cost (liquidity-aware half-spread + fees) at each rebalance · ' : ' '}
           Annualized metrics are volatile at short horizons; stabilize ~63 trading days from inception.
         </div>

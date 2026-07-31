@@ -14,7 +14,7 @@
  */
 
 import YahooFinance from 'yahoo-finance2'; // v3 — capitalised class import
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import {
@@ -24,6 +24,7 @@ import {
 } from '../src/math/matrixEngine.js';
 import { resolveSectorFromQuoteSummary } from '../src/math/assetSector.js';
 import { UNIVERSE_JK } from './universe.js';
+import { fetchBIRateSeries, BI_RATE_FALLBACK } from './bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const yahooFinance = new YahooFinance({
@@ -56,15 +57,8 @@ const BENCHMARK_TICKER = '^JKSE';
 /** Theta-decay half-life for volatility weighting (trading days). */
 const VOL_HALF_LIFE = DEFAULT_VOL_HALF_LIFE;
 
-/** Official Bank Indonesia BI-Rate table (English page; most-recent decision first). */
-const BI_RATE_URL = 'https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx';
-
-/** Last-known BI-Rate (decimal) — used if the live fetch fails so the snapshot never breaks. */
-const BI_RATE_FALLBACK = 0.0575; // 5.75% as of 18 June 2026
-
-/** Sanity bounds for a parsed policy rate (decimal). Rejects garbage like a stray "100 %". */
-const BI_RATE_MIN = 0.01;
-const BI_RATE_MAX = 0.15;
+/** Committed BI-Rate cache — the fallback when BI's backend is unreachable. */
+const BI_RATE_CACHE = join(__dirname, 'bi-rate.json');
 
 // ── Utility helpers ───────────────────────────────────────────────────────────
 
@@ -175,43 +169,44 @@ function serializePriceHistory(history) {
 }
 
 /**
- * Live BI-Rate (decimal) scraped from Bank Indonesia's official indicator page.
- * The EN page renders the policy-rate history as a most-recent-first table:
- *   <td>18 June 2026</td><td>5.75 %</td>… → we take the first date+rate pair.
- * Falls back to BI_RATE_FALLBACK on any network/parse/validation failure so the
- * snapshot is always written.
- * @returns {Promise<number>}
+ * Resolve r_f, preferring fresher sources: live scrape → committed bi-rate.json →
+ * the BI_RATE_FALLBACK literal.
+ *
+ * The cache tier is what makes a stalled BI backend harmless. Before it existed a
+ * failed scrape dropped straight to a literal frozen at authoring time, so a local
+ * `npm run dev` months later silently optimized against a stale policy rate with no
+ * visible signal. The weekday cron keeps the cache within a day of reality.
+ *
+ * On a successful scrape the cache is refreshed in passing, so running the optimizer
+ * locally also keeps it warm.
+ *
+ * @returns {Promise<{ rate: number, effective: string|null, source: string }>}
  */
-async function fetchBIRate() {
+async function resolveBIRate() {
   try {
-    const res = await fetch(BI_RATE_URL, {
-      headers: {
-        // BI's SharePoint backend stalls on non-browser requests — send real browser headers.
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      signal: AbortSignal.timeout(40000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const html = await res.text();
-    const body = html.slice(html.indexOf('<tbody'));
-    // First "<date></td> <td>rate %" pair = latest decision (table is newest-first).
-    const m = body.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*<\/td>\s*<td[^>]*>\s*(\d+(?:\.\d+)?)\s*%/);
-    if (!m) throw new Error('rate cell not found in table');
-
-    const rate = parseFloat(m[2]) / 100;
-    if (!Number.isFinite(rate) || rate < BI_RATE_MIN || rate > BI_RATE_MAX) {
-      throw new Error(`parsed rate out of range: ${m[2]}%`);
-    }
-
-    console.log(`  ✅ BI-Rate ${m[2]}% (effective ${m[1]})\n`);
-    return +rate.toFixed(6);
+    const { current, effective, history } = await fetchBIRateSeries();
+    console.log(`  \u2705 BI-Rate ${(current * 100).toFixed(2)}% (effective ${effective}, ${history.length} decision(s))\n`);
+    try {
+      const prior = existsSync(BI_RATE_CACHE) ? JSON.parse(readFileSync(BI_RATE_CACHE, 'utf8')) : {};
+      writeFileSync(BI_RATE_CACHE, JSON.stringify({
+        ...prior, generated: new Date().toISOString(), current, effective, history,
+      }, null, 2) + '\n');
+    } catch { /* cache refresh is opportunistic — never block the snapshot on it */ }
+    return { rate: current, effective, source: 'live' };
   } catch (err) {
-    console.warn(`  ⚠️  BI-Rate fetch failed (${err.message}); using fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}%\n`);
-    return BI_RATE_FALLBACK;
+    console.warn(`  \u26a0\ufe0f  BI-Rate fetch failed (${err.message})`);
   }
+
+  try {
+    const cache = JSON.parse(readFileSync(BI_RATE_CACHE, 'utf8'));
+    if (Number.isFinite(cache.current)) {
+      console.warn(`  \u2193 using cached ${(cache.current * 100).toFixed(2)}% (effective ${cache.effective}, cached ${cache.generated ?? 'unknown'})\n`);
+      return { rate: cache.current, effective: cache.effective ?? null, source: 'cache' };
+    }
+  } catch { /* fall through to the literal */ }
+
+  console.warn(`  \u2193 using fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}%\n`);
+  return { rate: BI_RATE_FALLBACK, effective: null, source: 'fallback' };
 }
 
 // ── Main extraction loop ──────────────────────────────────────────────────────
@@ -220,7 +215,7 @@ async function buildSnapshot() {
   console.log('🚀  IDX Portfolio Snapshot — Yahoo Finance v3\n');
 
   console.log('  ↳ Fetching BI-Rate (Bank Indonesia) …');
-  const riskFreeRate = await fetchBIRate();
+  const { rate: riskFreeRate, effective: riskFreeRateEffective } = await resolveBIRate();
 
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
@@ -336,7 +331,8 @@ async function buildSnapshot() {
   const snapshot = {
     generated:    new Date().toISOString(),
     description:  'IDX Large-Cap Live Snapshot — fetched from Yahoo Finance v3',
-    riskFreeRate, // live BI-Rate scraped from Bank Indonesia (see fetchBIRate)
+    riskFreeRate,          // BI-Rate — live scrape, else bi-rate.json cache (see resolveBIRate)
+    riskFreeRateEffective, // BI decision date behind that rate; null when the literal fallback was used
     historyRange: { start: FULL_HISTORY.start, end: weeklyEnd, interval: '1wk' },
     benchmark,
     assets:       assetProfiles,

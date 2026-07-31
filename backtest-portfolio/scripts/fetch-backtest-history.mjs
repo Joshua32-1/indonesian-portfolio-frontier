@@ -17,10 +17,11 @@
  */
 
 import YahooFinance from 'yahoo-finance2'; // v3 — capitalised class import
-import { writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { UNIVERSE_JK } from '../../portfolio-app/data/universe.js';
+import { fetchBIRateSeries, BI_RATE_FALLBACK, BI_RATE_MIN, BI_RATE_MAX } from '../../portfolio-app/data/bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const yahooFinance = new YahooFinance({
@@ -37,8 +38,52 @@ const BENCHMARK_TICKER = '^JKSE';
 /** Pull history from here; Yahoo returns from each name's actual listing onward. */
 const HISTORY_START = '2011-01-01';
 
-/** BI-Rate (decimal) used for Sharpe in the backtest. Matches fetch-snapshot fallback. */
-const RISK_FREE_RATE = 0.0575;
+/** Committed BI-Rate cache, shared with the optimizer. */
+const BI_RATE_CACHE = join(__dirname, '../../portfolio-app/data/bi-rate.json');
+
+/**
+ * Resolve r_f for the backtest: env override → live scrape → committed cache → literal.
+ *
+ * Returns a DATED SERIES, not just a scalar. A walk-forward that scores a 2013 rebalance
+ * at today's policy rate is quietly using information that did not exist then; the engine
+ * looks up the rate in effect at each step instead. `current` is kept alongside for the
+ * back-compat scalar field and for the r_f stat in the UI.
+ *
+ * RISK_FREE_RATE=0.06 forces constant mode — useful for reproducing an older result or
+ * for a sensitivity pass without a 3 MB refetch.
+ */
+async function resolveRiskFree() {
+  const override = process.env.RISK_FREE_RATE;
+  if (override != null && override !== '') {
+    const rate = Number(override);
+    if (!Number.isFinite(rate) || rate < BI_RATE_MIN || rate > BI_RATE_MAX) {
+      console.error(`RISK_FREE_RATE="${override}" is not a decimal in [${BI_RATE_MIN}, ${BI_RATE_MAX}] — refusing to guess.`);
+      process.exit(1);
+    }
+    console.log(`  r_f  ${(rate * 100).toFixed(2)}% (RISK_FREE_RATE override — constant)\n`);
+    return { current: rate, history: null };
+  }
+
+  try {
+    const { current, effective, history } = await fetchBIRateSeries();
+    console.log(`  r_f  ${(current * 100).toFixed(2)}% eff. ${effective} — ${history.length} decision(s), ${history[history.length - 1].effective} \u2192 ${effective}\n`);
+    return { current, history };
+  } catch (err) {
+    console.warn(`  r_f  live scrape failed (${err.message})`);
+  }
+
+  try {
+    const cache = JSON.parse(readFileSync(BI_RATE_CACHE, 'utf8'));
+    if (Number.isFinite(cache.current)) {
+      const history = Array.isArray(cache.history) && cache.history.length ? cache.history : null;
+      console.warn(`  \u2193 cached ${(cache.current * 100).toFixed(2)}% eff. ${cache.effective} — ${history?.length ?? 0} decision(s)\n`);
+      return { current: cache.current, history };
+    }
+  } catch { /* fall through */ }
+
+  console.warn(`  \u2193 fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}% (constant)\n`);
+  return { current: BI_RATE_FALLBACK, history: null };
+}
 
 // ── Date helpers (Jakarta calendar, UTC-safe) ─────────────────────────────────
 
@@ -127,6 +172,8 @@ async function fetchSharesOut(ticker) {
 async function main() {
   console.log('🚀  Backtest history fetch — Yahoo Finance v3\n');
 
+  const riskFree = await resolveRiskFree();
+
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
   const dailyEnd = lastCompletedTradingDayISO(now);
@@ -159,7 +206,8 @@ async function main() {
 
   const payload = {
     generated: new Date().toISOString(),
-    riskFreeRate: RISK_FREE_RATE,
+    riskFreeRate: riskFree.current,       // scalar, back-compat + the UI stat
+    riskFreeRateSeries: riskFree.history, // dated decisions; null ⇒ engine uses the scalar
     weeklyEnd,
     dailyEnd,
     tickers,
