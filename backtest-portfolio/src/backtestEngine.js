@@ -36,8 +36,31 @@ import {
 import { findMinVariancePortfolio, optimizeTailAware } from '../../portfolio-app/src/math/monteCarlo.js';
 import { makeRng } from '../../portfolio-app/src/math/robustObjective.js';
 import { computeEquilibriumReturns, defaultDelta } from '../../portfolio-app/src/math/blackLitterman.js';
+import { makeRateLookup, meanRateOver, perPeriodRate, BI_RATE_FALLBACK, INSTRUMENT_SWITCH_DATE } from '../../portfolio-app/data/bi-rate.js';
+import { sharpeFromExcess } from '../../portfolio-app/src/math/performance.js';
 
 const CORR_WINDOW_DAYS = 365; // trailing 1-year weekly correlation window
+
+/**
+ * Earliest date the walk-forward is allowed to start, independent of listing dates.
+ *
+ * Defaults to the 2016-08-19 policy-instrument change: before it the policy rate was the
+ * legacy BI Rate (a 12-month reference, ~6.50%); on it Bank Indonesia switched to the
+ * 7-Day Reverse Repo Rate (~5.25%). A window that straddles the switch puts a ~125 bp step
+ * in r_f that is an instrument change, not a policy move — so every Sharpe spanning it is
+ * computed against two different definitions of "risk-free" spliced together.
+ *
+ * Starting here costs ~4.5 years of window and buys one consistent instrument throughout.
+ * Pass windowStart: null to opt out and run the full spliced history instead.
+ */
+export const DEFAULT_WINDOW_START = INSTRUMENT_SWITCH_DATE;
+
+/** Later of two ISO dates; tolerates either being null/empty. */
+function laterISO(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return a > b ? a : b;
+}
 
 // Unconstrained long-only optimizer constraints: a single synthetic 'ALL' sector capped at
 // 1.0 and a per-name cap of 1.0 → neither binds (historical default). runLiveStrategy builds
@@ -136,13 +159,24 @@ function dailyLogReturns(daily) {
 
 // ── metrics ───────────────────────────────────────────────────────────────────
 
-function seriesMetrics(periodRets, equityFinal, rf, benchRets, periodsPerYear = 52) {
+/**
+ * @param {number[]} periodRets
+ * @param {number} equityFinal
+ * @param {number[]|number} rfPeriod  per-period risk-free rate(s), aligned to periodRets
+ *   (array = the dated case). NOT an annual scalar — callers de-annualize via
+ *   perPeriodRate so each period is charged the rate actually in effect during it.
+ * @param {number[]|null} benchRets
+ * @param {number} periodsPerYear
+ */
+function seriesMetrics(periodRets, equityFinal, rfPeriod, benchRets, periodsPerYear = 52) {
   const nPeriods = periodRets.length;
   const sqrtPpy = Math.sqrt(periodsPerYear);
   const years = nPeriods / periodsPerYear;
+  // annReturn stays GEOMETRIC — it is the honest "what you earned" number shown in the UI.
+  // Sharpe deliberately does not reconstruct from it (see performance.js).
   const annReturn = years > 0 ? Math.pow(equityFinal / 100, 1 / years) - 1 : 0;
   const annVol = stdev(periodRets) * sqrtPpy;
-  const sharpe = annVol > 0 ? (annReturn - rf) / annVol : 0;
+  const sharpe = sharpeFromExcess(periodRets, rfPeriod, periodsPerYear);
   const mdd = maxDrawdown(cumEquity(periodRets));
 
   const out = { annReturn, annVol, sharpe, maxDrawdown: mdd };
@@ -257,7 +291,7 @@ function rebalanceCost(wTarget, wPre, advVec) {
  *   advByStep[i] trailing ADV per asset at rebalance i, or null (→ flat cost)
  * Period-0 trades from cash (wPre = 0): the one-time deployment cost.
  */
-function buildCostedSeries(grossRets, wByStep, rByStep, advByStep, rf, benchRets, periodsPerYear = 52) {
+function buildCostedSeries(grossRets, wByStep, rByStep, advByStep, rfPeriod, benchRets, periodsPerYear = 52) {
   const T = grossRets.length;
   const n = wByStep[0]?.length ?? 0;
   const turnover = [], cost = [], netRets = [];
@@ -275,8 +309,8 @@ function buildCostedSeries(grossRets, wByStep, rByStep, advByStep, rf, benchRets
   const years = T / periodsPerYear;
   return {
     netRets, grossEq, netEq,
-    gross: seriesMetrics(grossRets, grossEq[grossEq.length - 1], rf, benchRets, periodsPerYear),
-    net: seriesMetrics(netRets, netEq[netEq.length - 1], rf, benchRets, periodsPerYear),
+    gross: seriesMetrics(grossRets, grossEq[grossEq.length - 1], rfPeriod, benchRets, periodsPerYear),
+    net: seriesMetrics(netRets, netEq[netEq.length - 1], rfPeriod, benchRets, periodsPerYear),
     annualTurnover: years > 0 ? turnover.reduce((a, v) => a + v, 0) / years : 0,
     annualCostDrag: years > 0 ? cost.reduce((a, v) => a + v, 0) / years : 0,
   };
@@ -337,7 +371,11 @@ function buildAttribution(included, weightRows, cByAsset, portRets) {
 export function runBacktest(data, includedTickers, opts = {}) {
   const volHalfLife = opts.volHalfLife ?? DEFAULT_VOL_HALF_LIFE;
   const kappa = opts.kappa ?? 0; // turnover penalty on the min-variance step (0 = off, exact baseline)
-  const rf = data.riskFreeRate ?? 0.0575;
+  const rf = data.riskFreeRate ?? BI_RATE_FALLBACK;
+  // Dated r_f: each rebalance is scored at the policy rate in effect ON that date, so a
+  // 2013 step never sees a rate BI had not set yet. Absent a series this collapses to the
+  // scalar, reproducing prior results exactly.
+  const rfAt = makeRateLookup(data.riskFreeRateSeries, rf);
   const warnings = [];
 
   const byTicker = new Map(data.tickers.map(t => [t.ticker, t]));
@@ -496,10 +534,12 @@ export function runBacktest(data, includedTickers, opts = {}) {
   // Cost-aware series: gross + net-of-cost equity curves and metrics per strategy.
   // IHSG is an index (no trading), so its net == gross.
   const adv = hasLiquidity ? advByStep : null;
-  const costMV = buildCostedSeries(minVarRets, wMVByStep, rByStep, adv, rf, ihsgRets);
-  const costEW = buildCostedSeries(eqRets, wEWByStep, rByStep, adv, rf, ihsgRets);
+  // Charge each period the rate in effect at its OPEN — known at t, so no look-ahead.
+  const rfPeriod = rebalanceWeeks.slice(0, minVarRets.length).map(d => perPeriodRate(rfAt(d), 52));
+  const costMV = buildCostedSeries(minVarRets, wMVByStep, rByStep, adv, rfPeriod, ihsgRets);
+  const costEW = buildCostedSeries(eqRets, wEWByStep, rByStep, adv, rfPeriod, ihsgRets);
   const ihEq = cumEquity(ihsgRets);
-  const ihMetrics = seriesMetrics(ihsgRets, ihEq[ihEq.length - 1], rf, null);
+  const ihMetrics = seriesMetrics(ihsgRets, ihEq[ihEq.length - 1], rfPeriod, null);
 
   const chart = rebalanceWeeks.map((d, i) => ({
     date: d,
@@ -532,7 +572,7 @@ export function runBacktest(data, includedTickers, opts = {}) {
       newestListing,
       nRebalances: rebalanceWeeks.length,
       nTickers: n,
-      riskFreeRate: rf,
+      ...rfWindowStats(rfAt, rf, rebalanceWeeks[0], rebalanceWeeks[rebalanceWeeks.length - 1]),
       costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
     },
     chart,
@@ -572,10 +612,29 @@ const VARIANTS = [
   { key: 'Tail10', label: 'Tail λ=1.0', mode: 'tailAware', tailPenalty: 1.0 },
 ];
 
+/**
+ * r_f summary for the results window. DISPLAY ONLY — the walk scores each step at its own
+ * dated rate; this is the single number shown in the UI's r_f stat, plus the range so a
+ * policy move inside the window is visible rather than averaged away silently.
+ */
+function rfWindowStats(rfAt, rf, startISO, endISO) {
+  if (!rfAt || rfAt.mode !== 'series' || !startISO || !endISO) {
+    return { riskFreeRate: rf, riskFreeRateMode: 'constant' };
+  }
+  const inWindow = [rfAt(startISO), rfAt(endISO), ...rfAt.history.filter(r => r.effective > startISO && r.effective < endISO).map(r => r.rate)];
+  return {
+    riskFreeRate: meanRateOver(rfAt.history, startISO, endISO) ?? rf,
+    riskFreeRateMode: 'series',
+    riskFreeRateRange: { min: Math.min(...inWindow), max: Math.max(...inWindow) },
+  };
+}
+
 /** Build per-step context (Σ, μ_eq, realized returns, ADV) once for a rebalance grid. */
 function buildStepContexts(grid, ctx) {
   const { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife,
-    benchByKey, sharesOut, capMode, rf, priorMode = 'cap', useSectors = false } = ctx;
+    benchByKey, sharesOut, capMode, rf, rfAt, priorMode = 'cap', useSectors = false } = ctx;
+  // Fall back to the flat rate when no lookup was supplied (direct callers / older tests).
+  const rateOn = rfAt ?? (() => rf);
   const n = included.length;
   const contexts = [];
   let lookAhead = null;
@@ -616,13 +675,15 @@ function buildStepContexts(grid, ctx) {
       const capRaw = s > 0 ? caps.map(v => v / s) : equalW;
       capW = priorMode === 'shrunk' ? capRaw.map((v, k) => 0.5 * v + 0.5 * equalW[k]) : capRaw;
     }
-    const delta = defaultDelta(covMatrix, capW, rf);
+    // r_f as of THIS rebalance date, not as of today.
+    const rfStep = rateOn(t);
+    const delta = defaultDelta(covMatrix, capW, rfStep);
     // computeEquilibriumReturns returns TOTAL returns (π = r_f + δ·Σ·w) — the space the shared
     // Sharpe objective expects (it subtracts r_f itself). Since the book is fully invested
     // (Σw=1), wᵀπ − r_f = wᵀ(δΣw), the true tangency numerator. Without the r_f gross-up in π,
     // the −r_f/σ term would reward variance → Max-Sharpe/Tail blow out into concentrated,
     // high-turnover portfolios.
-    const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rf, delta });
+    const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rfStep, delta });
 
     const rVec = included.map(a => {
       const p0 = row[a.ticker], p1 = rowNext[a.ticker];
@@ -641,7 +702,7 @@ function buildStepContexts(grid, ctx) {
         return win.length ? win.reduce((s, v) => s + v, 0) / win.length : 0;
       });
     }
-    contexts.push({ t, tNext, covMatrix, volAssets, muEq, rVec, advVec, ihsgRet });
+    contexts.push({ t, tNext, covMatrix, volAssets, muEq, rVec, advVec, ihsgRet, rf: rfStep });
   }
   return { contexts, lookAhead };
 }
@@ -756,7 +817,8 @@ function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIte
     const currentWeights = kappa > 0 && i > 0 ? driftWeights(weights[i - 1], contexts[i - 1].rVec) : null;
     const rng = seed != null ? makeRng((seed + i) >>> 0) : Math.random;
     const { weights: w } = optimizeTailAware(scenarios, c.covMatrix, c.volAssets, {
-      sectorCaps: constraints.sectorCaps, maxPositionCap: constraints.maxPositionCap, riskFreeRate: rf,
+      // Step's own r_f (set by buildStepContexts); falls back to the flat rate.
+      sectorCaps: constraints.sectorCaps, maxPositionCap: constraints.maxPositionCap, riskFreeRate: c.rf ?? rf,
       robustMode: mode, tailPenalty, turnoverPenalty: kappa, currentWeights,
       deterministicStarts: true, optimizeMaxIter, rng,
     });
@@ -766,11 +828,11 @@ function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIte
 }
 
 /** Cost the realized path of a weight sequence over its grid. */
-function costStrategy(weights, contexts, hasLiquidity, rf, benchRets, ppy) {
+function costStrategy(weights, contexts, hasLiquidity, rfPeriod, benchRets, ppy) {
   const grossRets = weights.map((w, i) => w.reduce((s, wk, k) => s + wk * contexts[i].rVec[k], 0));
   const rByStep = contexts.map(c => c.rVec);
   const advByStep = hasLiquidity ? contexts.map(c => c.advVec) : null;
-  return buildCostedSeries(grossRets, weights, rByStep, advByStep, rf, benchRets, ppy);
+  return buildCostedSeries(grossRets, weights, rByStep, advByStep, rfPeriod, benchRets, ppy);
 }
 
 /** Net-headline metric pack shared by the strategy backtests (net primary, gross alongside). */
@@ -805,8 +867,12 @@ function attributionFor(included, weights, contexts) {
  * inputs (sharedCtx for buildStepContexts). Returns { ok:false, warnings } on bad input
  * rather than throwing.
  */
-function prepareStrategyInputs(data, includedTickers, volHalfLife) {
-  const rf = data.riskFreeRate ?? 0.0575;
+function prepareStrategyInputs(data, includedTickers, volHalfLife, windowStart = DEFAULT_WINDOW_START) {
+  const rf = data.riskFreeRate ?? BI_RATE_FALLBACK;
+  // Dated r_f: each rebalance is scored at the policy rate in effect ON that date, so a
+  // 2013 step never sees a rate BI had not set yet. Absent a series this collapses to the
+  // scalar, reproducing prior results exactly.
+  const rfAt = makeRateLookup(data.riskFreeRateSeries, rf);
   const warnings = [];
   const byTicker = new Map(data.tickers.map(t => [t.ticker, t]));
   const included = includedTickers.map(t => byTicker.get(t)).filter(Boolean);
@@ -830,7 +896,10 @@ function prepareStrategyInputs(data, includedTickers, volHalfLife) {
 
   const aligned = alignPriceSeries(included.map(a => ({ id: a.ticker, history: a.weekly })));
   const newestListing = included.reduce((mx, a) => (a.listing > mx ? a.listing : mx), included[0].listing);
-  const backtestStart = addCalendarDays(newestListing, CORR_WINDOW_DAYS);
+  // Whichever binds later: enough history for the correlation window, or the instrument floor.
+  const listingBound = addCalendarDays(newestListing, CORR_WINDOW_DAYS);
+  const backtestStart = laterISO(listingBound, windowStart);
+  const boundBy = windowStart && backtestStart === windowStart && windowStart > listingBound ? 'windowStart' : 'listing';
   const startIdx = aligned.findIndex(r => r.date >= backtestStart);
   const rebalanceRows = startIdx >= 0 ? aligned.slice(startIdx) : [];
   if (rebalanceRows.length < 12) {
@@ -842,9 +911,19 @@ function prepareStrategyInputs(data, includedTickers, volHalfLife) {
     const px = data.benchmark.weekly.adjClose[i];
     if (px != null) benchByKey.set(canonicalWeeklyKey(d), px);
   });
+  // Surface a short r_f series rather than burying it: rateAsOf flat-extends backwards, so
+  // steps before the first captured decision are scored at the oldest known rate.
+  const firstStep = rebalanceRows[0].date;
+  const oldestDecision = rfAt.history[0]?.effective;
+  if (rfAt.mode === 'series' && oldestDecision && oldestDecision > firstStep) {
+    warnings.push(`r_f series starts ${oldestDecision}; steps from ${firstStep} use the oldest known rate (${(rfAt.history[0].rate * 100).toFixed(2)}%).`);
+  } else if (rfAt.mode === 'constant') {
+    warnings.push(`r_f is a single constant ${(rf * 100).toFixed(2)}% across the whole window (no dated series available).`);
+  }
+
   const corrAssets = included.map(a => ({ ticker: a.ticker, priceHistory: a.weekly }));
-  const sharedCtx = { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife, benchByKey, sharesOut, capMode, rf };
-  return { ok: true, rf, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx };
+  const sharedCtx = { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife, benchByKey, sharesOut, capMode, rf, rfAt };
+  return { ok: true, rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, windowStart: windowStart ?? null, boundBy, sharedCtx };
 }
 
 /**
@@ -868,11 +947,12 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     volHalfLife = DEFAULT_VOL_HALF_LIFE,
     seed = 12345,                   // fixed RNG seed ⇒ byte-reproducible + common random numbers
     priorMode = 'cap',              // BL-equilibrium prior weights: 'cap' | 'shrunk' | 'equal'
+    windowStart = DEFAULT_WINDOW_START, // earliest walk-forward step; null ⇒ listing-bound only
   } = opts;
 
-  const prep = prepareStrategyInputs(data, includedTickers, volHalfLife);
+  const prep = prepareStrategyInputs(data, includedTickers, volHalfLife, windowStart);
   if (!prep.ok) return { ok: false, warnings: prep.warnings };
-  const { rf, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx } = prep;
+  const { rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, windowStart: appliedWindowStart, boundBy, sharedCtx } = prep;
 
   const byFrequency = {};
   let lookAheadAny = null;
@@ -890,20 +970,25 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     const benchRets = contexts.map(c => c.ihsgRet);
     const dates = [...contexts.map(c => c.t), grid[grid.length - 1].date];
 
+    // Per-period r_f for this grid: each context already carries the rate in effect at
+    // its own rebalance date, so the Sharpe excess series and the optimizer that produced
+    // the weights are charged the SAME rate.
+    const rfPeriod = contexts.map(c => perPeriodRate(c.rf ?? rf, ppy));
+
     // Baselines on this grid.
     const mvW = walkMinVar(contexts);
     const ewW = contexts.map(() => Array(included.length).fill(1 / included.length));
-    const costMV = costStrategy(mvW, contexts, hasLiquidity, rf, benchRets, ppy);
-    const costEW = costStrategy(ewW, contexts, hasLiquidity, rf, benchRets, ppy);
+    const costMV = costStrategy(mvW, contexts, hasLiquidity, rfPeriod, benchRets, ppy);
+    const costEW = costStrategy(ewW, contexts, hasLiquidity, rfPeriod, benchRets, ppy);
     const ihEq = cumEquity(benchRets);
-    const ihMetrics = seriesMetrics(benchRets, ihEq[ihEq.length - 1], rf, null, ppy);
+    const ihMetrics = seriesMetrics(benchRets, ihEq[ihEq.length - 1], rfPeriod, null, ppy);
 
     // Tail-objective variants (Max-Sharpe + tail-λ levels) at the fixed κ.
     const curves = {};
     const metrics = {};
     for (const v of variants) {
       const w = walkVariant(contexts, { mode: v.mode, tailPenalty: v.tailPenalty, kappa, paths, optimizeMaxIter, rf, seed });
-      const costed = costStrategy(w, contexts, hasLiquidity, rf, benchRets, ppy);
+      const costed = costStrategy(w, contexts, hasLiquidity, rfPeriod, benchRets, ppy);
       curves[v.key] = { grossEq: round2(costed.grossEq), netEq: round2(costed.netEq) };
       metrics[v.key] = packNet(costed);
     }
@@ -917,7 +1002,7 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     // κ-sweep at the reference variant λ (tailPenalty) — run for EVERY frequency.
     const sweep = kappaSweep.map(k => {
       const w = walkVariant(contexts, { mode: 'tailAware', tailPenalty, kappa: k, paths, optimizeMaxIter, rf, seed });
-      return { kappa: k, ...packNet(costStrategy(w, contexts, hasLiquidity, rf, benchRets, ppy)) };
+      return { kappa: k, ...packNet(costStrategy(w, contexts, hasLiquidity, rfPeriod, benchRets, ppy)) };
     });
 
     byFrequency[freqKey] = { label: freq.label, nRebalances: grid.length, dates, curves, metrics, kappaSweep: sweep };
@@ -945,7 +1030,11 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
       kappa, kappaSweep, frequencies, paths, tailPenalty,
       seed, priorMode, capMode, costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
     },
-    window: { start: rebalanceRows[0]?.date, end: rebalanceRows[rebalanceRows.length - 1]?.date, newestListing, nTickers: included.length, riskFreeRate: rf },
+    window: {
+      start: rebalanceRows[0]?.date, end: rebalanceRows[rebalanceRows.length - 1]?.date,
+      newestListing, windowStart: appliedWindowStart, boundBy, nTickers: included.length,
+      ...rfWindowStats(rfAt, rf, rebalanceRows[0]?.date, rebalanceRows[rebalanceRows.length - 1]?.date),
+    },
     byFrequency,
     headline,
     limitations: [
@@ -999,7 +1088,7 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
 
   const prep = prepareStrategyInputs(data, includedTickers, volHalfLife);
   if (!prep.ok) return { ok: false, warnings: prep.warnings };
-  const { rf, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx } = prep;
+  const { rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx } = prep;
 
   const grid = rebalanceRows.filter((_, i) => i % freq.step === 0);
   if (grid.length < 6) return { ok: false, warnings: [`${freq.label}: too few rebalances (${grid.length}).`] };
@@ -1039,9 +1128,12 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
   let done = 0;
   const progress = label => { if (onProgress) onProgress(done, total, label); };
 
+  // Same dated r_f the optimizer saw at each step (see runStrategyBacktest).
+  const rfPeriod = contexts.map(c => perPeriodRate(c.rf ?? rf, ppy));
+
   const curves = {}, metrics = {}, attribution = {}, fees = {};
   const addStrategy = (key, weights) => {
-    const costed = costStrategy(weights, contexts, hasLiquidity, rf, benchRets, ppy);
+    const costed = costStrategy(weights, contexts, hasLiquidity, rfPeriod, benchRets, ppy);
     curves[key] = { grossEq: round2(costed.grossEq), netEq: round2(costed.netEq) };
     metrics[key] = packNet(costed);
     attribution[key] = attributionFor(included, weights, contexts);
@@ -1074,7 +1166,7 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
 
   // IHSG (index — net == gross, no attribution).
   const ihEq = cumEquity(benchRets);
-  const ihMetrics = seriesMetrics(benchRets, ihEq[ihEq.length - 1], rf, null, ppy);
+  const ihMetrics = seriesMetrics(benchRets, ihEq[ihEq.length - 1], rfPeriod, null, ppy);
   curves.IHSG = { eq: round2(ihEq) };
   metrics.IHSG = { ...ihMetrics, grossSharpe: ihMetrics.sharpe, grossAnnReturn: ihMetrics.annReturn, annualTurnover: 0, annualCostDrag: 0 };
 
@@ -1084,7 +1176,8 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
     params: { lambda, kappa, maxPositionCap, priorMode, sectorCap, paths, optimizeMaxIter, capMode, costModel: hasLiquidity ? 'liquidity-aware' : 'flat' },
     window: {
       start: dates[0], end: dates[dates.length - 1], newestListing,
-      nRebalances: grid.length, nTickers: n, riskFreeRate: rf,
+      nRebalances: grid.length, nTickers: n,
+      ...rfWindowStats(rfAt, rf, dates[0], dates[dates.length - 1]),
       costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
     },
     dates,

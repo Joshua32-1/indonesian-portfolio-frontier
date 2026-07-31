@@ -16,11 +16,32 @@
 import { runLiveStrategy } from './backtestEngine.js';
 
 let historyPromise = null;
+
+/**
+ * Price history plus the CURRENT BI-Rate archive.
+ *
+ * `npm run fetch` bakes a copy of the archive into backtest-history.json, but that file is
+ * ~3 MB and gets refetched rarely, while the archive is refreshed daily. So the archive is
+ * overlaid here from /bi-rate.json (served live by the dev server — see vite.config.js),
+ * which is what makes `npm run dev` score every step at the right r_f without a refetch.
+ *
+ * The overlay only ever ADDS information: the archive is union-merged and never drops rows,
+ * so it is a superset of whatever the snapshot carried. If it is unreachable the baked-in
+ * series is used unchanged.
+ */
 function loadHistory() {
   if (!historyPromise) {
-    historyPromise = fetch('/backtest-history.json').then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status} — run \`npm run fetch\` first`);
-      return r.json();
+    historyPromise = Promise.all([
+      fetch('/backtest-history.json').then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status} — run \`npm run fetch\` first`);
+        return r.json();
+      }),
+      fetch('/bi-rate.json').then(r => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([data, archive]) => {
+      if (archive?.history?.length && Number.isFinite(archive.current)) {
+        return { ...data, riskFreeRate: archive.current, riskFreeRateSeries: archive.history };
+      }
+      return data;
     });
   }
   return historyPromise;

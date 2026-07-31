@@ -1,0 +1,106 @@
+name: Refresh BI-Rate
+
+# Daily maintenance of portfolio-app/data/bi-rate.json — THE archive of Bank Indonesia
+# policy-rate decisions, and the single file r_f comes from anywhere in the monorepo.
+#
+# THIS JOB EXISTS FOR THE LIVE FORWARD TEST, and only for it. The optimizer and the
+# backtest both read the archive at `npm run dev` (their `predev` refreshes it first), so
+# they are current by construction and need nothing pushed to them. The tracker is the
+# exception: it is deployed to Vercel and builds from committed data, so a rate move
+# reaches it only if something writes it in. That is what this does.
+#
+# BI announces after its Board of Governors meeting (~14:00-15:00 WIB), so 09:00 UTC =
+# 16:00 WIB catches a decision the same afternoon.
+#
+# COST: near zero. No npm install — the script uses only global fetch + fs. It writes ONLY
+# when the rate or the decision history actually changed (a `generated` timestamp bump
+# alone is not a change), so this lands ~8 commits a year matching BI's meeting calendar
+# rather than ~250 no-op ones.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1-5'   # Weekdays 09:00 UTC = 16:00 WIB, after BI's announcement window
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Never let two refreshes race on a push to main.
+concurrency:
+  group: refresh-bi-rate
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No `npm ci` on purpose — refresh-bi-rate.js imports only ./bi-rate.js and node:fs.
+      - name: Refresh BI-Rate archive
+        id: scrape
+        working-directory: portfolio-app
+        run: node data/refresh-bi-rate.js
+
+      - name: Note dry-run on non-default branch
+        if: github.ref != 'refs/heads/main'
+        run: echo "Ref is ${{ github.ref }}, not main — scraping and reporting only, no commit." >> "$GITHUB_STEP_SUMMARY"
+
+      # Coverage is the number that matters on a manual run: how far back the archive
+      # reaches decides whether the backtest's dated r_f covers its window, and the split by
+      # source shows how much of it is still the compiled seed rather than BI's own table.
+      - name: Report archive coverage
+        run: |
+          node -e '
+            const a = require("./portfolio-app/data/bi-rate.json");
+            const h = a.history ?? [];
+            const by = {};
+            for (const r of h) by[r.source ?? "compiled"] = (by[r.source ?? "compiled"] ?? 0) + 1;
+            console.log(h.length
+              ? `BI-Rate archive: ${h.length} decision(s), ${h[h.length-1].effective} → ${h[0].effective} (current ${(a.current*100).toFixed(2)}%)`
+              : "BI-Rate archive: empty");
+            console.log("By source: " + Object.entries(by).map(([s,n]) => `${s}=${n}`).join(", "));
+            const CUTOFF = "2012-01-01";
+            if (h.length && h[h.length-1].effective > CUTOFF)
+              console.log(`NOTE: archive starts after the backtest cutoff ${CUTOFF} — rateAsOf flat-extends before that and the engine warns.`);
+            if (by["compiled"]) 
+              console.log(`NOTE: ${by["compiled"]} row(s) are the compiled seed, not scraped. Run `+"`node scripts/verify-bi-rate-seed.mjs`"+` to reconcile against BI.`);
+          ' >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+
+      # A scraped row that contradicts the compiled seed means bi-rate-seed.js is wrong.
+      # Precedence already discards the bad row, but silently — surface it so it gets fixed.
+      - name: Flag seed conflicts
+        if: steps.scrape.outputs.seed_conflicts != ''
+        run: echo "::warning::${{ steps.scrape.outputs.seed_conflicts }} compiled seed row(s) disagree with Bank Indonesia — fix portfolio-app/data/bi-rate-seed.js (see job log)."
+
+      # The forward test is the reason this job exists: push the archive into the tracker's
+      # committed data so every daily row is scored at the rate in effect on its own date.
+      - name: Sync r_f into portfolios.json
+        if: steps.scrape.outputs.changed == 'true' && github.ref == 'refs/heads/main'
+        run: node live-dashboard-portfolio/scripts/sync-risk-free-rate.mjs
+
+      # github.ref guard: HEAD is whatever ref was dispatched, so pushing HEAD:main from a
+      # feature branch would land that branch's commits on main. Scrape-and-report only there.
+      - name: Commit & push if changed
+        if: steps.scrape.outputs.changed == 'true' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add portfolio-app/data/bi-rate.json live-dashboard-portfolio/data/portfolios.json
+          if git diff --staged --quiet; then
+            echo "Nothing staged — skipping commit."
+            exit 0
+          fi
+          # Rebase onto latest main in case the daily snapshot commit landed since checkout.
+          git pull --rebase --autostash origin main
+          git commit -m "chore: refresh BI-Rate archive $(date -u +%Y-%m-%d)"
+          git push origin HEAD:main

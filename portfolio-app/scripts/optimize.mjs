@@ -30,6 +30,7 @@ import { runMonteCarloSimulation } from '../src/math/monteCarlo.js';
 import { DEFAULT_FACTOR_CONFIG } from '../src/math/factorConfig.js';
 import { DEFAULT_SIM_CONFIG } from '../src/math/simConfig.js';
 import { buildSectorCapsForSectors } from '../src/math/sectorCaps.js';
+import { BI_RATE_FALLBACK } from '../data/bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT  = join(__dirname, '..');
@@ -76,7 +77,10 @@ if (!existsSync(SNAPSHOT)) {
 const snap = JSON.parse(readFileSync(SNAPSHOT, 'utf8'));
 const cfg  = existsSync(CONFIG) ? JSON.parse(readFileSync(CONFIG, 'utf8')) : {};
 const assets = snap.assets ?? [];
-const riskFreeRate = snap.riskFreeRate ?? 0.0575;
+const riskFreeRate = snap.riskFreeRate ?? BI_RATE_FALLBACK;
+// BI decision date behind that rate — carried into the emit so the dashboard can show
+// the as-of alongside the number instead of an undated "BI-Rate".
+const riskFreeRateEffective = snap.riskFreeRateEffective ?? null;
 
 if (assets.length < 2) {
   console.error('Snapshot has fewer than 2 assets — nothing to optimize.');
@@ -219,7 +223,10 @@ if (emitArg) {
   }
   if (problems > 0) { console.error(`\n${problems} stream(s) failed validation — not emitting.`); process.exit(1); }
   if (dryRun) { console.log(`\n[dry-run] would emit ${Object.keys(streams).length} streams → ${emitArg}`); process.exit(0); }
-  writeFileSync(emitArg, JSON.stringify({ effective, configTag, streams }, null, 2) + '\n');
+  // riskFreeRate rides along so merge-rebalances can stamp portfolios.json with the rate
+  // the weights were ACTUALLY optimized at — the live tracker then scores Sharpe against
+  // that same rate rather than a hand-set constant.
+  writeFileSync(emitArg, JSON.stringify({ effective, configTag, riskFreeRate, riskFreeRateEffective, streams }, null, 2) + '\n');
   console.log(`\nEmitted ${Object.keys(streams).length} streams (${configTag}, ${effective}) → ${emitArg}`);
   process.exit(0);
 }

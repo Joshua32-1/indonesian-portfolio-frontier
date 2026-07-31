@@ -24,6 +24,7 @@ import {
   calcAnnualizedVol,
   calcMaxDrawdown,
   calcSharpe,
+  perPeriodRiskFree,
   calcTrackingError,
   calcInfoRatio,
 } from './math/portfolioIndex.js';
@@ -298,7 +299,10 @@ export default function App() {
     const benchmark    = snapshot.benchmark?.priceHistory ?? null;
     const inception    = portfoliosData.inception;
     const all          = portfoliosData.portfolios ?? [];
-    const riskFreeRate = portfoliosData.riskFreeRate ?? 0.0575;
+    const riskFreeRate   = portfoliosData.riskFreeRate ?? 0.0575;
+    // Dated archive so each forward-test day is scored at the rate in effect ON that day —
+    // otherwise the next BI move retroactively re-scores every day already recorded.
+    const rfArchive      = portfoliosData.riskFreeRateSeries ?? null;
 
     // Slice = the 6 variants for the selected methodology config at the selected κ.
     // PERT ignores prior/τ; BL slices by (prior, τ); both slice by κ (missing κ ⇒ 0).
@@ -361,6 +365,7 @@ export default function App() {
       const dailyRets = extractDailyReturns(series);
       const annRet    = calcAnnualizedReturn(series);
       const annVol    = calcAnnualizedVol(dailyRets);
+      const rfPeriod  = perPeriodRiskFree(series.slice(1).map(r => r.date), rfArchive, riskFreeRate);
       const { portRets, benchRets } = alignedPortBench(series);
       const te        = calcTrackingError(portRets, benchRets);
       const excess    = annRet != null && ihsgAnnRet != null ? annRet - ihsgAnnRet : null;
@@ -369,7 +374,7 @@ export default function App() {
         annReturn:     annRet,
         annVol,
         maxDrawdown:   calcMaxDrawdown(series),
-        sharpe:        calcSharpe(annRet, annVol, riskFreeRate),
+        sharpe:        calcSharpe(dailyRets, rfPeriod),
         trackingError: te,
         infoRatio:     calcInfoRatio(excess, te),
       };
@@ -600,7 +605,11 @@ export default function App() {
           </table>
         </div>
         <div style={{ marginTop: 8, fontSize: 9, color: TEXT_DIM }}>
-          Sharpe = (ann. return − {((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}% BI-Rate) / ann. vol ·
+          Sharpe = mean(daily excess) / sd(daily excess) × √252, excess vs the BI-Rate{' '}
+          {portfoliosData?.riskFreeRateSeries?.length
+            ? `in effect on each day (${portfoliosData.riskFreeRateSeries.length} decisions archived; ${((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}% today)`
+            : `${((portfoliosData?.riskFreeRate ?? 0.0575) * 100).toFixed(2)}%${portfoliosData?.riskFreeRateEffective ? ` (eff. ${portfoliosData.riskFreeRateEffective})` : ''}`} ·
+          {' '}not reconstructible from the ann. return and ann. vol columns (those stay geometric) ·
           {net ? ' net = gross − IDX turnover cost (liquidity-aware half-spread + fees) at each rebalance · ' : ' '}
           Annualized metrics are volatile at short horizons; stabilize ~63 trading days from inception.
         </div>

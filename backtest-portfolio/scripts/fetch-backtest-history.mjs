@@ -17,10 +17,11 @@
  */
 
 import YahooFinance from 'yahoo-finance2'; // v3 — capitalised class import
-import { writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { UNIVERSE_JK } from '../../portfolio-app/data/universe.js';
+import { BI_RATE_FALLBACK, BI_RATE_MIN, BI_RATE_MAX } from '../../portfolio-app/data/bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const yahooFinance = new YahooFinance({
@@ -37,8 +38,54 @@ const BENCHMARK_TICKER = '^JKSE';
 /** Pull history from here; Yahoo returns from each name's actual listing onward. */
 const HISTORY_START = '2011-01-01';
 
-/** BI-Rate (decimal) used for Sharpe in the backtest. Matches fetch-snapshot fallback. */
-const RISK_FREE_RATE = 0.0575;
+/** The shared BI-Rate archive, owned by portfolio-app/data/refresh-bi-rate.js. */
+const BI_RATE_ARCHIVE = join(__dirname, '../../portfolio-app/data/bi-rate.json');
+
+/**
+ * Resolve r_f for the backtest: env override → the bi-rate.json archive → literal.
+ *
+ * Reads the archive rather than scraping. One script owns it (refresh-bi-rate.js) and
+ * everything else reads it, so there is exactly one place a rate can enter the monorepo.
+ * `npm run fetch` bakes the series into backtest-history.json; the dev server ALSO serves
+ * the archive live at /bi-rate.json, so `npm run dev` picks up a rate move without a 3 MB
+ * refetch (see vite.config.js and backtestWorker.js).
+ *
+ * THE BACKTEST TAKES THE WHOLE DATED SERIES, not just a scalar. A walk-forward that scores
+ * a 2013 rebalance at today's policy rate is quietly using information that did not exist
+ * then; the engine looks up the rate in effect at each step instead. `current` is kept
+ * alongside for the back-compat scalar field and the r_f stat in the UI.
+ *
+ * RISK_FREE_RATE=0.06 forces constant mode — for reproducing a pre-series result or a
+ * sensitivity pass.
+ */
+function resolveRiskFree() {
+  const override = process.env.RISK_FREE_RATE;
+  if (override != null && override !== '') {
+    const rate = Number(override);
+    if (!Number.isFinite(rate) || rate < BI_RATE_MIN || rate > BI_RATE_MAX) {
+      console.error(`RISK_FREE_RATE="${override}" is not a decimal in [${BI_RATE_MIN}, ${BI_RATE_MAX}] — refusing to guess.`);
+      process.exit(1);
+    }
+    console.log(`  r_f  ${(rate * 100).toFixed(2)}% (RISK_FREE_RATE override — constant)\n`);
+    return { current: rate, history: null };
+  }
+
+  try {
+    const archive = JSON.parse(readFileSync(BI_RATE_ARCHIVE, 'utf8'));
+    if (Number.isFinite(archive.current)) {
+      const history = Array.isArray(archive.history) && archive.history.length ? archive.history : null;
+      const oldest = history ? history[history.length - 1].effective : null;
+      console.log(`  r_f  ${(archive.current * 100).toFixed(2)}% eff. ${archive.effective} — archive of ${history?.length ?? 0} decision(s)${oldest ? `, ${oldest} → ${archive.effective}` : ''}\n`);
+      return { current: archive.current, history };
+    }
+    console.warn(`  r_f  archive has no usable \`current\``);
+  } catch (err) {
+    console.warn(`  r_f  archive unreadable (${err.message}) — run \`npm run refresh-bi-rate\` in portfolio-app`);
+  }
+
+  console.warn(`  ↓ fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}% (constant)\n`);
+  return { current: BI_RATE_FALLBACK, history: null };
+}
 
 // ── Date helpers (Jakarta calendar, UTC-safe) ─────────────────────────────────
 
@@ -130,6 +177,42 @@ async function main() {
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
   const dailyEnd = lastCompletedTradingDayISO(now);
+
+  // `npm run dev` runs this on every start (predev), and a full refetch is ~20 names ×
+  // (daily + weekly + quoteSummary). --if-stale makes that cheap: if the file on disk already
+  // covers the last completed session there are no new bars to get, so skip it. Checking the
+  // bar we WOULD fetch beats a wall-clock TTL — it is exact, and it never re-fetches on a
+  // weekend or a holiday when nothing new exists.
+  const outPathEarly = join(__dirname, '..', 'public', 'backtest-history.json');
+  if (process.argv.includes('--if-stale')) {
+    try {
+      const prior = JSON.parse(readFileSync(outPathEarly, 'utf8'));
+
+      // TWO ways to be stale, and the universe one is easy to forget: editing universe.js is
+      // the whole reason the ticker list is a single source of truth, so a new name must not
+      // be invisible until the next trading day just because prices happen to be current.
+      const want = TICKERS.map(t => t.replace('.JK', '')).sort();
+      const have = (prior.tickers ?? []).map(t => t.ticker).sort();
+      const added = want.filter(t => !have.includes(t));
+      const removed = have.filter(t => !want.includes(t));
+      const datesCurrent = prior.dailyEnd >= dailyEnd && prior.weeklyEnd >= weeklyEnd;
+
+      if (datesCurrent && !added.length && !removed.length && have.length) {
+        console.log(`  ✅ up to date — ${have.length} tickers through ${prior.dailyEnd} (last completed session). Skipping fetch.`);
+        console.log(`     Force a refetch with \`npm run fetch\`.\n`);
+        return;
+      }
+      if (added.length || removed.length) {
+        console.log(`  ↻ universe changed${added.length ? ` — added ${added.join(', ')}` : ''}${removed.length ? ` — removed ${removed.join(', ')}` : ''}. Refetching.\n`);
+      } else {
+        console.log(`  ↻ stale — have ${prior.dailyEnd}, last completed session is ${dailyEnd}. Refetching.\n`);
+      }
+    } catch {
+      console.log('  ↻ no usable backtest-history.json — fetching.\n');
+    }
+  }
+
+  const riskFree = resolveRiskFree();
   const chartEnd = addCalendarDays(jakartaISO(now), 1); // period2 is exclusive-ish
 
   const tickers = [];
@@ -159,7 +242,8 @@ async function main() {
 
   const payload = {
     generated: new Date().toISOString(),
-    riskFreeRate: RISK_FREE_RATE,
+    riskFreeRate: riskFree.current,       // scalar, back-compat + the UI stat
+    riskFreeRateSeries: riskFree.history, // dated decisions; null ⇒ engine uses the scalar
     weeklyEnd,
     dailyEnd,
     tickers,

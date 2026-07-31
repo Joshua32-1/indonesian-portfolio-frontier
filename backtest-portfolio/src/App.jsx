@@ -6,9 +6,17 @@ import WeightsHistoryChart from './components/WeightsHistoryChart.jsx';
 import AttributionTable from './components/AttributionTable.jsx';
 import StrategyBacktest from './components/StrategyBacktest.jsx';
 
-// Names listed on/before this date form the "Long history" preset — recent IPOs bind the
-// walk-forward window to a few weeks, so this preset gives the machinery a meaningful window.
-const LONG_HISTORY_CUTOFF = '2012-01-01';
+// The walk-forward starts no earlier than this: the date Bank Indonesia replaced the legacy
+// BI Rate (~6.50%) with the 7-Day Reverse Repo Rate (~5.25%). A window straddling it computes
+// Sharpe against two spliced definitions of "risk-free". Mirrors DEFAULT_WINDOW_START in the
+// engine — kept as a literal here because this file is UI, not math.
+const WINDOW_START = '2016-08-19';
+
+// Names listed on/before this date form the "Long history" preset. It FOLLOWS the window start
+// (one year earlier, for the correlation lookback) rather than being pinned independently: a
+// name listed in 2015 has all the history a 2016-start window needs, and a recent IPO would
+// bind the window to a few weeks.
+const LONG_HISTORY_CUTOFF = '2015-08-19';
 
 const LAMBDAS = [0.1, 0.25, 0.35, 0.5];
 const FREQ_OPTS = [
@@ -38,8 +46,10 @@ const GRID_PATHS = 40;
 const GRID_ITER = 12;
 const PRIOR_LABEL = { cap: 'Market-cap', shrunk: 'Shrunk', equal: 'Equal' };
 
-// Frozen "Reference backtest" precompute artifacts (npm run backtest), one file per prior.
-// The cap run keeps the canonical filename; shrunk/equal get a -<prior> suffix.
+// "Reference backtest" precompute artifacts (npm run backtest / the Regenerate button), one
+// file per prior. The cap run keeps the canonical filename; shrunk/equal get a -<prior> suffix.
+// LOCAL AND GITIGNORED — not committed, and not built by CI. A fresh clone has none until you
+// generate one, which is the point: it always reflects a universe you chose.
 const REF_FILE = { cap: '/backtest-results.json', shrunk: '/backtest-results-shrunk.json', equal: '/backtest-results-equal.json' };
 
 // Cache key includes the fidelity (paths / iters) so reduced-fidelity grid cells never collide
@@ -94,12 +104,18 @@ export default function App() {
   const [gridProgress, setGridProgress] = useState(null); // { done, total }
   const [gridMeta, setGridMeta] = useState(null);         // { frequency } the grid was generated at
 
-  // Frozen "Reference backtest" precompute (committed JSON), with a per-prior selector.
+  // "Reference backtest" precompute (local, gitignored JSON), with a per-prior selector.
   // Distinct from the live explorer above: this is the high-fidelity, seeded, citable artifact —
-  // it updates only on a deliberate `npm run backtest` + commit, and is fixed to the core universe.
+  // it changes only when you rebuild it, over a universe you picked.
   const [refPrior, setRefPrior] = useState('cap');
   const refCacheRef = useRef({});            // prior → parsed JSON | null (missing) | 'loading'
   const [, setRefTick] = useState(0);        // bump to re-render when a lazy fetch lands
+
+  // Rebuild of the frozen reference artifact, driven by the dev server (vite.config.js
+  // spawns run-strategy-backtest.mjs so a UI rebuild and `npm run backtest` stay one code
+  // path). null until the first attempt; `unavailable` when not running under `npm run dev`.
+  const [gen, setGen] = useState(null); // { running, log[], exitCode, error, unavailable }
+  const genPollRef = useRef(null);
 
   const workerRef = useRef(null);
   const jobRef = useRef(0);             // monotonic job id source for ALL jobs (main + grid)
@@ -181,6 +197,68 @@ export default function App() {
       .then(j => { refCacheRef.current[refPrior] = j; setRefTick(t => t + 1); });
   }, [refPrior]);
 
+  // Drop the cached artifact for a prior and re-read it from disk. Cache-busted because the
+  // file was just overwritten at the same URL and the dev server will happily serve a 304.
+  const reloadReference = useCallback((prior) => {
+    refCacheRef.current[prior] = 'loading';
+    setRefTick(t => t + 1);
+    fetch(`${REF_FILE[prior]}?t=${Date.now()}`)
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then(j => { refCacheRef.current[prior] = j; setRefTick(t => t + 1); });
+  }, []);
+
+  // Poll the generator while a rebuild is in flight. The sweep runs for minutes, so this is
+  // a status poll rather than a stream; on a clean exit the fresh artifact is pulled in.
+  useEffect(() => {
+    if (!gen?.running) return undefined;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const s = await (await fetch('/__reference/status')).json();
+        if (stop) return;
+        setGen(g => ({ ...g, running: s.running, log: s.log ?? g.log, exitCode: s.exitCode }));
+        if (!s.running && s.exitCode === 0) reloadReference(refPrior);
+      } catch {
+        if (!stop) setGen(g => ({ ...g, running: false, error: 'Lost contact with the dev server.' }));
+      }
+    };
+    genPollRef.current = setInterval(tick, 1500);
+    tick();
+    return () => { stop = true; clearInterval(genPollRef.current); };
+  }, [gen?.running, refPrior, reloadReference]);
+
+  // Rebuild the reference artifact over the CURRENT universe selection, at the currently
+  // selected prior. Everything else (seed, paths, iterations, full κ-sweep, all three
+  // frequencies) stays at the script's defaults so the artifact keeps its citable fidelity.
+  const generateReference = async () => {
+    const universe = [...included];
+    if (universe.length < 2) return;
+    setGen({ running: true, log: ['Starting…'], exitCode: null, error: null });
+    try {
+      const res = await fetch('/__reference/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ universe, prior: refPrior }),
+      });
+      if (res.status === 404 || res.status === 405) {
+        // Not running under the dev server — the endpoint only exists in configureServer.
+        setGen({ running: false, log: [], exitCode: null, unavailable: true });
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setGen({ running: false, log: [], exitCode: null, error: body.error || `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      setGen({ running: false, log: [], exitCode: null, error: e.message });
+    }
+  };
+
+  const cancelReference = async () => {
+    try { await fetch('/__reference/cancel', { method: 'POST' }); } catch { /* the poll will notice */ }
+  };
+
   const toggle = t => setIncluded(prev => {
     const next = new Set(prev);
     next.has(t) ? next.delete(t) : next.add(t);
@@ -223,6 +301,29 @@ export default function App() {
     setGridResults(initial);
     setGridProgress({ done, total });
   };
+
+  // Is the reference artifact still about the names you are looking at?
+  //
+  // It carries the universe it was built over, but nothing used to check it. That was
+  // survivable while a weekly cron rebuilt it; now that it only changes when you press
+  // Regenerate, an artifact can sit for months describing a universe that no longer exists —
+  // silently, because every number in it still renders perfectly.
+  //
+  // Two different problems, and the second is the serious one:
+  //   drifted  — built over a different selection than you have toggled (often deliberate)
+  //   orphaned — cites names that are no longer in backtest-history.json at all, i.e.
+  //              universe.js changed underneath it. Those weights can never be reproduced.
+  const refUniverseDiff = useMemo(() => {
+    const built = refCurrent?.ok && Array.isArray(refCurrent.universe) ? refCurrent.universe : null;
+    if (!built || !data) return null;
+    const builtSet = new Set(built);
+    const known = new Set(data.tickers.map(t => t.ticker));
+    const orphaned = built.filter(t => !known.has(t));
+    const missing = [...included].filter(t => !builtSet.has(t)); // selected but not in the artifact
+    const extra = built.filter(t => !included.has(t));           // in the artifact but not selected
+    if (!orphaned.length && !missing.length && !extra.length) return null;
+    return { orphaned, missing, extra };
+  }, [refCurrent, data, included]);
 
   const newestIncluded = useMemo(() => {
     if (!data) return null;
@@ -269,7 +370,7 @@ export default function App() {
             </span>
           </div>
           <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-            <button onClick={selectLongHistory} style={miniBtn} title="Names listed on/before 2012 — longest window">Long history</button>
+            <button onClick={selectLongHistory} style={miniBtn} title={`Names listed on/before ${LONG_HISTORY_CUTOFF} — full window from ${WINDOW_START}`}>Long history</button>
             <button onClick={selectAll} style={miniBtn}>All</button>
             <button onClick={selectNone} style={miniBtn}>None</button>
           </div>
@@ -340,8 +441,19 @@ export default function App() {
                 <Stat label="WINDOW" value={`${w.start} → ${w.end}`} />
                 <Stat label="REBALANCES" value={`${w.nRebalances} (${result.frequency})`} />
                 <Stat label="NAMES" value={`${w.nTickers}`} />
-                <Stat label="WINDOW BOUND BY" value={w.newestListing} sub="newest listing + 1yr" />
-                <Stat label="r_f" value={`${(w.riskFreeRate * 100).toFixed(2)}%`} sub="BI-Rate" />
+                <Stat
+                  label="WINDOW BOUND BY"
+                  value={w.boundBy === 'windowStart' ? (w.windowStart ?? WINDOW_START) : w.newestListing}
+                  sub={w.boundBy === 'windowStart' ? 'BI7DRR instrument switch' : 'newest listing + 1yr'}
+                />
+                <Stat
+                  label="r_f"
+                  value={`${(w.riskFreeRate * 100).toFixed(2)}%`}
+                  sub={w.riskFreeRateMode === 'series'
+                    ? `BI-Rate · window avg${w.riskFreeRateRange && w.riskFreeRateRange.min !== w.riskFreeRateRange.max
+                        ? ` (${(w.riskFreeRateRange.min * 100).toFixed(2)}–${(w.riskFreeRateRange.max * 100).toFixed(2)}%)` : ''}`
+                    : 'BI-Rate · flat'}
+                />
                 <Stat label="COST MODEL" value={w.costModel} />
               </div>
               {result.warnings?.length > 0 && (
@@ -479,14 +591,33 @@ export default function App() {
           the live explorer above — this is the citable tearsheet, not a live recompute. */}
       <div style={{ ...panel, marginTop: 16, borderColor: '#2A2150', background: '#120E26' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <SectionTitle>REFERENCE BACKTEST — frozen precompute (committed, seeded, full κ-sweep)</SectionTitle>
-          <Toggle label="Prior" value={refPrior} setValue={setRefPrior} options={PRIORS} />
+          <SectionTitle>REFERENCE BACKTEST — high-fidelity precompute (local, seeded, full κ-sweep)</SectionTitle>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Toggle label="Prior" value={refPrior} setValue={setRefPrior} options={PRIORS} />
+            <button
+              onClick={gen?.running ? cancelReference : generateReference}
+              disabled={!gen?.running && included.size < 2}
+              title={gen?.running ? 'Stop the run; the artifact on disk is left alone' : `Rebuild this artifact over the ${included.size} selected names`}
+              style={{
+                ...runBtn, marginLeft: 0,
+                background: gen?.running ? '#7F1D1D' : '#7C3AED',
+                color: '#E2E8F0',
+                cursor: !gen?.running && included.size < 2 ? 'default' : 'pointer',
+                opacity: !gen?.running && included.size < 2 ? 0.5 : 1,
+              }}
+            >
+              {gen?.running ? 'Cancel' : `Regenerate (${included.size})`}
+            </button>
+          </div>
         </div>
         <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 4, lineHeight: 1.6 }}>
-          The auditable tearsheet generated offline by <code style={refCode}>npm run backtest</code> over the fixed
-          long-history core universe — <b>byte-reproducible</b> (fixed RNG seed) and higher-fidelity than the live
-          explorer above. It does <b>not</b> react to the universe toggle and updates only when the precompute is
-          deliberately re-run and committed. Use the explorer above for live "what-if" exploration; cite this.
+          The auditable tearsheet — <b>byte-reproducible</b> (fixed RNG seed), full κ-sweep across all three
+          frequencies, higher-fidelity than the live explorer above. It does <b>not</b> react to the universe toggle
+          as you click; it changes only when you rebuild it. Use the explorer for live "what-if"; cite this.
+          {' '}<b>Regenerate</b> rebuilds it over your current selection — the dev server runs the same{' '}
+          <code style={refCode}>npm run backtest</code> script, so a rebuild here and one from a terminal are
+          identical at the same seed. Written to <code style={refCode}>public/{REF_FILE[refPrior].replace('/', '')}</code>,
+          which is <b>gitignored and local</b> — nothing regenerates it behind your back.
         </div>
         {refProv && (
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline', marginTop: 10 }}>
@@ -494,13 +625,76 @@ export default function App() {
             <Stat label="SEED" value={refProv.seed != null ? String(refProv.seed) : '—'} sub="fixed ⇒ reproducible" />
             <Stat label="PATHS" value={refProv.paths != null ? String(refProv.paths) : '—'} sub="MC tail scenarios" />
             <Stat label="PRIOR" value={PRIOR_LABEL[refProv.priorMode] || refProv.priorMode || '—'} />
-            <Stat label="UNIVERSE" value={refProv.nTickers != null ? `${refProv.nTickers} names` : '—'} sub={refProv.start ? `${refProv.start} → ${refProv.end}` : undefined} />
+            <Stat
+              label="UNIVERSE"
+              value={refProv.nTickers != null ? `${refProv.nTickers} names` : '—'}
+              sub={refCurrent?.universeSelection?.mode === 'explicit'
+                ? 'chosen selection'
+                : refCurrent?.universeSelection?.listingCutoff
+                  ? `listed ≤ ${refCurrent.universeSelection.listingCutoff}`
+                  : (refProv.start ? `${refProv.start} → ${refProv.end}` : undefined)}
+            />
+            {refProv.start && <Stat label="WINDOW" value={`${refProv.start} → ${refProv.end}`} />}
+          </div>
+        )}
+
+        {refUniverseDiff && (
+          <div style={{
+            marginTop: 10, fontSize: 11, lineHeight: 1.7, padding: '8px 11px', borderRadius: 6,
+            border: `1px solid ${refUniverseDiff.orphaned.length ? '#7F1D1D' : '#3B2E5A'}`,
+            background: refUniverseDiff.orphaned.length ? '#1A0B0B' : '#150F2E',
+            color: refUniverseDiff.orphaned.length ? '#FCA5A5' : '#C4B5FD',
+          }}>
+            {refUniverseDiff.orphaned.length > 0 && (
+              <div style={{ marginBottom: refUniverseDiff.missing.length || refUniverseDiff.extra.length ? 6 : 0 }}>
+                <b>⚠️ This artifact predates a universe change.</b> It was built over{' '}
+                <b>{refUniverseDiff.orphaned.join(', ')}</b>, which {refUniverseDiff.orphaned.length === 1 ? 'is' : 'are'} no
+                longer in <code style={refCode}>universe.js</code>. Its weights cannot be reproduced from the current
+                history — <b>regenerate before citing it</b>.
+              </div>
+            )}
+            {(refUniverseDiff.missing.length > 0 || refUniverseDiff.extra.length > 0) && (
+              <div>
+                Built over a different set than you have selected
+                {refUniverseDiff.missing.length > 0 && <> · selected but <b>not</b> in it: {refUniverseDiff.missing.join(', ')}</>}
+                {refUniverseDiff.extra.length > 0 && <> · in it but not selected: {refUniverseDiff.extra.join(', ')}</>}
+                . Hit <b>Regenerate</b> to rebuild over your selection.
+              </div>
+            )}
+          </div>
+        )}
+
+        {gen?.unavailable && (
+          <div style={{ marginTop: 10, fontSize: 11, color: '#F59E0B' }}>
+            ⚠️ The generator endpoint only exists under <code style={refCode}>npm run dev</code> (it spawns a Node
+            process and writes into <code style={refCode}>public/</code>). From a built bundle, rebuild from a terminal:{' '}
+            <code style={refCode}>UNIVERSE={[...included].join(',')} PRIOR={refPrior} npm run backtest</code>
+          </div>
+        )}
+        {gen?.error && <div style={{ marginTop: 10, fontSize: 11, color: '#F87171' }}>⚠️ {gen.error}</div>}
+        {gen && !gen.unavailable && !gen.error && (gen.running || gen.exitCode != null) && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 10, color: gen.running ? '#A78BFA' : gen.exitCode === 0 ? '#10B981' : '#F87171', fontWeight: 700, marginBottom: 4 }}>
+              {gen.running
+                ? `Rebuilding over ${included.size} names — full sweep, minutes not seconds. Leaving this page does not stop it.`
+                : gen.exitCode === 0 ? 'Rebuilt — the panel below is the new artifact.' : `Generator exited ${gen.exitCode}.`}
+            </div>
+            <pre style={genLog}>{(gen.log || []).join('\n').trimEnd() || '…'}</pre>
           </div>
         )}
         <div style={{ marginTop: 12 }}>
           {refLoading
             ? <div style={{ fontSize: 12, color: '#5B7A95' }}>Loading reference backtest…</div>
-            : <StrategyBacktest results={refCurrent} />}
+            : refCurrent
+              ? <StrategyBacktest results={refCurrent} />
+              : (
+                <div style={{ fontSize: 11, color: '#F59E0B', lineHeight: 1.7 }}>
+                  No artifact for the <b>{PRIOR_LABEL[refPrior]}</b> prior yet — these are local and gitignored, so a
+                  fresh clone starts without one. Pick your universe on the left, then hit{' '}
+                  <b>Regenerate ({included.size})</b> above. The full sweep takes minutes; from a terminal it is{' '}
+                  <code style={refCode}>PRIOR={refPrior} npm run backtest</code>.
+                </div>
+              )}
         </div>
       </div>
     </Shell>
@@ -559,6 +753,11 @@ const feeCard = { background: '#0A1A2E', border: '1px solid #122845', borderRadi
 const miniPanel = { background: '#0A1A2E', border: '1px solid #122845', borderRadius: 8, padding: '8px 8px 4px' };
 const miniTitle = { fontSize: 10, fontWeight: 700, color: '#9FB8CC', marginBottom: 2 };
 const miniPlaceholder = { height: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: '#46617B' };
+const genLog = {
+  background: '#08050F', border: '1px solid #2A2150', borderRadius: 6, padding: '8px 10px', margin: 0,
+  fontSize: 10, lineHeight: 1.5, color: '#9FB8CC', fontFamily: 'ui-monospace, monospace',
+  maxHeight: 220, overflow: 'auto', whiteSpace: 'pre-wrap',
+};
 
 function Shell({ children }) {
   return (

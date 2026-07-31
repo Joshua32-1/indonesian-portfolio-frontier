@@ -9,7 +9,7 @@ A **monorepo** for an Indonesia Stock Exchange (IDX) quantitative portfolio work
 | App | Role | Runs where |
 |-----|------|------------|
 | [`portfolio-app/`](portfolio-app/) | **Optimizer** — Monte Carlo + Black-Litterman + tail-aware robust optimization. Research/construction tool. Produces candidate portfolio weights. | Local only |
-| [`backtest-portfolio/`](backtest-portfolio/) | **Backtester** — look-ahead-free, cost-aware walk-forward evaluation of the machinery (tail-aware Max-Sharpe + tail-λ variants vs min-variance / equal-weight / IHSG), **net of IDX transaction costs** (gross alongside), across weekly/monthly/quarterly with a turnover-penalty (κ) sweep. | Local only |
+| [`backtest-portfolio/`](backtest-portfolio/) | **Backtester** — look-ahead-free, cost-aware walk-forward evaluation of the machinery (tail-aware Max-Sharpe + tail-λ variants vs min-variance / equal-weight / IHSG), **net of IDX transaction costs** (gross alongside), across weekly/monthly/quarterly with a turnover-penalty (κ) sweep. Window starts **2016-08-19** (the BI7DRR instrument switch). Fully local — no committed artifacts, no CI. | Local only |
 | [`live-dashboard-portfolio/`](live-dashboard-portfolio/) | **Tracker** — indexed performance of chosen portfolios vs. IHSG. Consumes weights appended either by hand or by the automated weekly rebalance. | Vercel (production) |
 
 The apps **share data contracts but no code**. The optimizer is the source of weights; the dashboard tracks them. Weights reach the dashboard either manually (analyst copies from the Analytics tab) or via the automated weekly rebalance ([`portfolio-app/scripts/optimize.mjs`](portfolio-app/scripts/optimize.mjs) + `.github/workflows/weekly-rebalance.yml`). See [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -22,14 +22,23 @@ npm run dev              # predev auto-runs fetch-snapshot, then Vite dev server
 npm run build            # fetch-snapshot && vite build
 npm run fetch-snapshot   # node data/fetch-snapshot.js — rebuild ~1MB snapshot from Yahoo + BI-Rate
 npm run refresh-sectors  # node data/refresh-sectors.js — update sector labels only (fast, no price refetch)
+npm run refresh-bi-rate  # node data/refresh-bi-rate.js — update the BI-Rate ARCHIVE (data/bi-rate.json)
+                         #   …--import f.{json,csv}  fold in an operator-supplied history file
+npm run verify-bi-rate   # node scripts/verify-bi-rate-seed.mjs — reconcile the compiled seed vs BI (needs network)
 node scripts/validate-factors.mjs   # math regression suite — RUN AFTER ANY src/math/ CHANGE
+node scripts/validate-bi-rate.mjs   # BI-Rate parser, archive merge/precedence, seed integrity, rateAsOf look-ahead guard (no network)
 ```
 
 **`backtest-portfolio/`**:
 ```bash
 npm run fetch            # node scripts/fetch-backtest-history.mjs — full daily+weekly history + liquidity + shares-out
+npm run fetch-if-stale   # …but skips when the file already covers the last completed session
 npm run backtest         # node scripts/run-strategy-backtest.mjs — precompute tail-aware variants × frequency × κ-sweep → public/backtest-results.json
-npm run dev              # Vite dev server (port 5174) — live explorer + precomputed strategy panel
+UNIVERSE=BBCA,BBRI,… npm run backtest   # …over an EXPLICIT universe instead of the listing-cutoff default
+WINDOW_START=none npm run backtest      # …over the full spliced history instead of from the 2016-08-19 switch
+npm run dev              # predev refreshes the BI-Rate archive + price history, then Vite (port 5174).
+                         #   NOTHING in public/ is committed — the Regenerate button in the Reference
+                         #   panel rebuilds the precompute over the current universe selection.
 ```
 
 **`live-dashboard-portfolio/`**:
@@ -41,11 +50,12 @@ node scripts/init-portfolios-matrix.mjs   # (re)init the EMPTY 300-stream matrix
 node scripts/add-kappa-streams.mjs        # additively add the κ>0 skeletons to a seeded portfolios.json
 node scripts/backseed-kappa.mjs           # one-shot: seed κ>0 history for existing effective dates
 node scripts/merge-rebalances.mjs <emit…> # assemble per-config emits → portfolios.json + κ-expand (cron merge step)
+node scripts/sync-risk-free-rate.mjs      # push the cached BI-Rate into portfolios.json (weekday cron step)
 ```
 
 **Forward-test matrix (optimizer side):** `portfolio-app/scripts/optimize.mjs` is BL-capable per run via flags — `--methodology pert|bl`, `--prior-mode cap|shrunk|equal`, `--tau <n>`, `--emit <file>` — and tags emitted (κ=0) stream ids `<base>@<configTag>`. The config **default is still legacy PERT** (`optimizer-config.json → factorConfig.useFactorModel:false`). Seed the full 10-config matrix locally with `portfolio-app/scripts/seed-forward-matrix.mjs` (sequential, resumable). The **κ axis** {0,0.1,0.25,0.5,0.75} is NOT an optimize.mjs flag — κ>0 streams (`-k<KK>`) are derived downstream by `merge-rebalances.mjs` as a post-hoc blend toward drift (mirrors the backtester's `blendTowardDrift`). See [FORWARD-TEST.md](FORWARD-TEST.md).
 
-**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** over all 10 configs — `optimize.mjs --emit` per config → `merge-rebalances.mjs` appends κ=0 rows and κ-expands to 300 streams → **auto-commits to `main`**, no PR), `refresh-backtest.yml` (weekly full backtest sweep — `npm run fetch && npm run backtest` → commits `backtest-results.json`).
+**Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-bi-rate.yml` (**weekday BI-Rate archive update** → `bi-rate.json` + `portfolios.json` — exists **for the live forward test only**; the optimizer and backtest read the archive at `npm run dev` and need no cron), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** over all 10 configs — `optimize.mjs --emit` per config → `merge-rebalances.mjs` appends κ=0 rows and κ-expands to 300 streams → **auto-commits to `main`**, no PR). **The backtest has no workflow** — it is a local research tool: `npm run dev` refetches prices and the Regenerate button rebuilds the precompute, so nothing about it is committed or CI-built.
 
 **Ticker universe:** the investable list lives once in [`portfolio-app/data/universe.js`](portfolio-app/data/universe.js) (`UNIVERSE_JK`, `.JK` suffix) and is imported by all three fetch scripts. The dashboard fetch unions in any ticker still held in `portfolios.json` so removed names stay tracked; the optimizer/backtest use the canonical list. See the [`add-ticker`](.claude/skills/add-ticker/SKILL.md) skill.
 
@@ -61,7 +71,10 @@ node scripts/merge-rebalances.mjs <emit…> # assemble per-config emits → port
 ## Conventions
 
 - **Annualization:** daily σ × √252, weekly σ × √52, 252 trading days/year (`SQRT_252` in `matrixEngine.js`).
-- **Risk-free rate:** Bank Indonesia BI-Rate, live-fetched at snapshot time, fallback **5.75%** (`BI_RATE_FALLBACK` in `fetch-snapshot.js`). Used as `r_f` everywhere.
+- **Risk-free rate:** Bank Indonesia BI-Rate. The single source of truth is the **archive** [`portfolio-app/data/bi-rate.json`](portfolio-app/data/bi-rate.json) — assembled by `refresh-bi-rate.js` from [`bi-rate-seed.js`](portfolio-app/data/bi-rate-seed.js) (compiled history back to 2011) ∪ rows already archived ∪ a live scrape, with pure lookups in [`bi-rate.js`](portfolio-app/data/bi-rate.js). **Only `refresh-bi-rate.js` scrapes; everything else reads the archive** (→ `BI_RATE_FALLBACK` **5.75%**). Union, never replace; `bi.go.id` > `imported` > `compiled` on a shared date.
+  - Optimizer reads **`current` only** (no time dimension). Backtest and live tracker read the **dated `history`** (`rateAsOf`) so each step is scored at the rate in effect then — never today's.
+  - **Two caveats before citing a number:** rows tagged `source: "compiled"` were compiled from public record, not scraped — run `npm run verify-bi-rate` to reconcile. And the **2016-08-19** BI-Rate → BI7DRR switch puts a real ~125 bp step in the series that is an instrument change, not a policy move. See [ASSUMPTIONS.md](ASSUMPTIONS.md#risk-free-rate).
+- **Ex-post Sharpe:** `mean(e_t)/sd(e_t) × √ppy` on per-period excess returns (`performance.js`), *not* `(annReturn − r_f)/annVol`. The displayed annualized return stays geometric, so Sharpe does not reconstruct from the displayed columns.
 - **Tickers:** Yahoo is *queried* with the `.JK` suffix (`BBCA.JK`); both snapshots, `portfolios.json`, and the dashboard store the bare symbol (`BBCA`) — the fetch scripts strip the suffix.
 - **Currency:** all monetary values are IDR.
 - **Benchmark:** IHSG = Jakarta Composite Index, Yahoo ticker `^JKSE`.

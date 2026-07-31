@@ -30,6 +30,8 @@ This is a genuine **out-of-sample** test — the optimizer was built and calibra
 
 **Primary metric: H1 (Sharpe ratio)**. The dashboard's Sharpe column is the main verdict signal.
 
+> **Estimator change (2026-07).** Sharpe was previously `(ann. return − r_f)/ann. vol`, which structurally cannot express a BI-Rate that moves mid-window. It is now the standard per-period excess-return form (see the metrics table below). The dashboard recomputes Sharpe from the stored index series on **every load** and stores no Sharpe time series, so the entire history re-derives under the new construction at once — past and present readings stay directly comparable, with no mixed-methodology splice across the inception date.
+
 ---
 
 ## Rebalance protocol — automated, every Sunday
@@ -132,7 +134,7 @@ Open the live dashboard (deployed on Vercel). Use the **Methodology / Prior / τ
 | **Total Return** | Cumulative compounded return since 2026-06-30, indexed from 100 | Simple comparison; not risk-adjusted |
 | **Ann. Return** | CAGR over the observation window | Comparable across strategies; meaningful after ~63 trading days |
 | **Ann. Vol** | Daily std dev × √252 | Lower is not always better — read alongside Sharpe |
-| **Sharpe** | (Ann. return − BI-Rate 5.75%) / Ann. vol | **Primary H1 metric.** > 1.0 is strong for IDX equities; > IHSG Sharpe = outperformance |
+| **Sharpe** | `mean(e_t)/sd(e_t) × √252`, where `e_t` = daily return − daily BI-Rate | **Primary H1 metric.** > 1.0 is strong for IDX equities; > IHSG Sharpe = outperformance. **Not** reconstructible from the Ann. Return and Ann. Vol columns — those stay geometric while this is a moment ratio of the excess series |
 | **Max DD** | Largest peak-to-trough decline | **H2 metric.** Compare tail-10/20/35/50 values during IDX drawdowns |
 | **Tracking Error** | Annualized std dev of (portfolio daily return − IHSG daily return) | Active-bet sizing; high TE = large active bets vs the index |
 | **Info Ratio** | (Portfolio ann. return − IHSG ann. return) / Tracking Error | Active-bet efficiency; > 0.5 after 12 months is a reasonable target |

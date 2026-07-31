@@ -270,13 +270,91 @@ export function calcMaxDrawdown(series) {
 }
 
 /**
- * Sharpe ratio: (annReturn - riskFreeRate) / annVol.
- * Both inputs must be annualized decimals.
+ * The BI-Rate in effect ON `isoDate` — the most recent decision at-or-before it, never a
+ * later one. Dates before the archive begins fall back to its oldest rate.
+ *
+ * MIRROR of rateAsOf in portfolio-app/data/bi-rate.js, local for the same reason calcSharpe
+ * is (this app's Vercel build root cannot import across the repo). KEEP IN SYNC.
+ *
+ * @param {{effective: string, rate: number}[]} archive  any order
+ * @param {string} isoDate
+ * @returns {number|null}  null only when the archive is empty
+ */
+export function rateAsOf(archive, isoDate) {
+  const asc = (archive ?? [])
+    .filter(r => r && typeof r.effective === 'string' && Number.isFinite(r.rate))
+    .slice()
+    .sort((a, b) => (a.effective < b.effective ? -1 : a.effective > b.effective ? 1 : 0));
+  if (!asc.length) return null;
+
+  let lo = 0, hi = asc.length - 1, idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (asc[mid].effective <= isoDate) { idx = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return idx >= 0 ? asc[idx].rate : asc[0].rate;
+}
+
+/**
+ * Per-period risk-free rates for a dated return series — the point-in-time r_f the live
+ * forward test scores each day at.
+ *
+ * The forward test appends a row every trading day and will run for years across several
+ * BI decisions. Dividing the whole history by ONE rate would retroactively re-score every
+ * past day the next time BI moves, so each day is charged the rate that was actually in
+ * effect on it. With no archive this returns a scalar and the behaviour is identical to
+ * the old constant-rate form.
+ *
+ * @param {string[]} dates                        ISO dates aligned to the return series
+ * @param {{effective: string, rate: number}[]|null} archive
+ * @param {number} fallbackAnnual                 used when the archive is absent/empty
+ * @param {number} dpy
+ * @returns {number|number[]}  per-period rate(s), ready for calcSharpe
+ */
+export function perPeriodRiskFree(dates, archive, fallbackAnnual, dpy = 252) {
+  const toPeriod = (annual) => Math.pow(1 + (annual ?? 0), 1 / dpy) - 1;
+  if (!Array.isArray(archive) || !archive.length || !Array.isArray(dates) || !dates.length) {
+    return toPeriod(fallbackAnnual);
+  }
+  return dates.map(d => toPeriod(rateAsOf(archive, d) ?? fallbackAnnual));
+}
+
+/**
+ * Annualized Sharpe from PER-PERIOD excess returns:
+ *
+ *     e_t  = r_t − rf_t
+ *     Sharpe = mean(e_t) / std(e_t) × √252
+ *
+ * MIRROR of sharpeFromExcess in portfolio-app/src/math/performance.js — kept local
+ * because this app's Vercel build root is live-dashboard-portfolio/ and cannot import
+ * across the repo (CLAUDE.md: shared data contracts, not shared code). KEEP IN SYNC:
+ * a divergence makes the forward test and the backtest quietly incomparable, which is
+ * the one comparison both exist to support. See that file for why this replaced
+ * (annReturn − rf)/annVol — in short, the old form structurally cannot express an r_f
+ * that moves inside the window, and is not the Sharpe ratio as defined.
+ *
+ * `dailyLogReturns` are converted to SIMPLE returns first: subtracting a simple rf from
+ * a log return mixes conventions and shifts the mean by ≈σ²/2.
+ *
+ * @param {number[]} dailyLogReturns  the `rp` series (weighted log returns)
+ * @param {number|number[]} rfPeriod  PER-PERIOD rate — scalar, or one per return (see
+ *                                    perPeriodRiskFree). An array shorter than the return
+ *                                    series holds its last value.
+ * @param {number} dpy
  * @returns {number|null}
  */
-export function calcSharpe(annReturn, annVol, riskFreeRate) {
-  if (annReturn == null || annVol == null || !annVol || !isFinite(annVol)) return null;
-  return (annReturn - riskFreeRate) / annVol;
+export function calcSharpe(dailyLogReturns, rfPeriod, dpy = 252) {
+  if (!Array.isArray(dailyLogReturns) || dailyLogReturns.length < 2) return null;
+  const dated = Array.isArray(rfPeriod);
+  const rfAt = (i) => (dated ? (rfPeriod[i] ?? rfPeriod[rfPeriod.length - 1] ?? 0) : (rfPeriod ?? 0));
+  const excess = dailyLogReturns.map((r, i) => (Math.exp(r) - 1) - rfAt(i));
+  const n = excess.length;
+  const m = excess.reduce((s, v) => s + v, 0) / n;
+  // Sample (n−1), matching portfolio-app/src/math/performance.js.
+  const sd = Math.sqrt(Math.max(0, excess.reduce((s, x) => s + (x - m) * (x - m), 0) / (n - 1)));
+  if (!(sd > 0) || !isFinite(sd)) return null;
+  return (m / sd) * Math.sqrt(dpy);
 }
 
 /**
