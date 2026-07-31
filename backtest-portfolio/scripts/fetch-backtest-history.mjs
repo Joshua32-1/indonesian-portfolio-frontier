@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { UNIVERSE_JK } from '../../portfolio-app/data/universe.js';
-import { fetchBIRateSeries, BI_RATE_FALLBACK, BI_RATE_MIN, BI_RATE_MAX } from '../../portfolio-app/data/bi-rate.js';
+import { BI_RATE_FALLBACK, BI_RATE_MIN, BI_RATE_MAX } from '../../portfolio-app/data/bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const yahooFinance = new YahooFinance({
@@ -38,21 +38,27 @@ const BENCHMARK_TICKER = '^JKSE';
 /** Pull history from here; Yahoo returns from each name's actual listing onward. */
 const HISTORY_START = '2011-01-01';
 
-/** Committed BI-Rate cache, shared with the optimizer. */
-const BI_RATE_CACHE = join(__dirname, '../../portfolio-app/data/bi-rate.json');
+/** The shared BI-Rate archive, owned by portfolio-app/data/refresh-bi-rate.js. */
+const BI_RATE_ARCHIVE = join(__dirname, '../../portfolio-app/data/bi-rate.json');
 
 /**
- * Resolve r_f for the backtest: env override → live scrape → committed cache → literal.
+ * Resolve r_f for the backtest: env override → the bi-rate.json archive → literal.
  *
- * Returns a DATED SERIES, not just a scalar. A walk-forward that scores a 2013 rebalance
- * at today's policy rate is quietly using information that did not exist then; the engine
- * looks up the rate in effect at each step instead. `current` is kept alongside for the
- * back-compat scalar field and for the r_f stat in the UI.
+ * Reads the archive rather than scraping. One script owns it (refresh-bi-rate.js) and
+ * everything else reads it, so there is exactly one place a rate can enter the monorepo.
+ * `npm run fetch` bakes the series into backtest-history.json; the dev server ALSO serves
+ * the archive live at /bi-rate.json, so `npm run dev` picks up a rate move without a 3 MB
+ * refetch (see vite.config.js and backtestWorker.js).
  *
- * RISK_FREE_RATE=0.06 forces constant mode — useful for reproducing an older result or
- * for a sensitivity pass without a 3 MB refetch.
+ * THE BACKTEST TAKES THE WHOLE DATED SERIES, not just a scalar. A walk-forward that scores
+ * a 2013 rebalance at today's policy rate is quietly using information that did not exist
+ * then; the engine looks up the rate in effect at each step instead. `current` is kept
+ * alongside for the back-compat scalar field and the r_f stat in the UI.
+ *
+ * RISK_FREE_RATE=0.06 forces constant mode — for reproducing a pre-series result or a
+ * sensitivity pass.
  */
-async function resolveRiskFree() {
+function resolveRiskFree() {
   const override = process.env.RISK_FREE_RATE;
   if (override != null && override !== '') {
     const rate = Number(override);
@@ -65,23 +71,19 @@ async function resolveRiskFree() {
   }
 
   try {
-    const { current, effective, history } = await fetchBIRateSeries();
-    console.log(`  r_f  ${(current * 100).toFixed(2)}% eff. ${effective} — ${history.length} decision(s), ${history[history.length - 1].effective} \u2192 ${effective}\n`);
-    return { current, history };
+    const archive = JSON.parse(readFileSync(BI_RATE_ARCHIVE, 'utf8'));
+    if (Number.isFinite(archive.current)) {
+      const history = Array.isArray(archive.history) && archive.history.length ? archive.history : null;
+      const oldest = history ? history[history.length - 1].effective : null;
+      console.log(`  r_f  ${(archive.current * 100).toFixed(2)}% eff. ${archive.effective} — archive of ${history?.length ?? 0} decision(s)${oldest ? `, ${oldest} → ${archive.effective}` : ''}\n`);
+      return { current: archive.current, history };
+    }
+    console.warn(`  r_f  archive has no usable \`current\``);
   } catch (err) {
-    console.warn(`  r_f  live scrape failed (${err.message})`);
+    console.warn(`  r_f  archive unreadable (${err.message}) — run \`npm run refresh-bi-rate\` in portfolio-app`);
   }
 
-  try {
-    const cache = JSON.parse(readFileSync(BI_RATE_CACHE, 'utf8'));
-    if (Number.isFinite(cache.current)) {
-      const history = Array.isArray(cache.history) && cache.history.length ? cache.history : null;
-      console.warn(`  \u2193 cached ${(cache.current * 100).toFixed(2)}% eff. ${cache.effective} — ${history?.length ?? 0} decision(s)\n`);
-      return { current: cache.current, history };
-    }
-  } catch { /* fall through */ }
-
-  console.warn(`  \u2193 fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}% (constant)\n`);
+  console.warn(`  ↓ fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}% (constant)\n`);
   return { current: BI_RATE_FALLBACK, history: null };
 }
 
@@ -172,7 +174,7 @@ async function fetchSharesOut(ticker) {
 async function main() {
   console.log('🚀  Backtest history fetch — Yahoo Finance v3\n');
 
-  const riskFree = await resolveRiskFree();
+  const riskFree = resolveRiskFree();
 
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);

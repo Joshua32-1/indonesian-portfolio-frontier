@@ -24,7 +24,7 @@ import {
 } from '../src/math/matrixEngine.js';
 import { resolveSectorFromQuoteSummary } from '../src/math/assetSector.js';
 import { UNIVERSE_JK } from './universe.js';
-import { fetchBIRateSeries, BI_RATE_FALLBACK } from './bi-rate.js';
+import { BI_RATE_FALLBACK } from './bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const yahooFinance = new YahooFinance({
@@ -57,8 +57,8 @@ const BENCHMARK_TICKER = '^JKSE';
 /** Theta-decay half-life for volatility weighting (trading days). */
 const VOL_HALF_LIFE = DEFAULT_VOL_HALF_LIFE;
 
-/** Committed BI-Rate cache — the fallback when BI's backend is unreachable. */
-const BI_RATE_CACHE = join(__dirname, 'bi-rate.json');
+/** The BI-Rate archive — the single file r_f is read from. Owned by refresh-bi-rate.js. */
+const BI_RATE_ARCHIVE = join(__dirname, 'bi-rate.json');
 
 // ── Utility helpers ───────────────────────────────────────────────────────────
 
@@ -169,44 +169,36 @@ function serializePriceHistory(history) {
 }
 
 /**
- * Resolve r_f, preferring fresher sources: live scrape → committed bi-rate.json →
- * the BI_RATE_FALLBACK literal.
+ * Resolve r_f by READING THE ARCHIVE — data/bi-rate.json → BI_RATE_FALLBACK literal.
  *
- * The cache tier is what makes a stalled BI backend harmless. Before it existed a
- * failed scrape dropped straight to a literal frozen at authoring time, so a local
- * `npm run dev` months later silently optimized against a stale policy rate with no
- * visible signal. The weekday cron keeps the cache within a day of reality.
+ * This script deliberately does NOT scrape Bank Indonesia. One script owns the archive
+ * (data/refresh-bi-rate.js) and everything else reads it, so there is exactly one place a
+ * rate can enter the monorepo and no way for two apps to disagree about today's r_f.
+ * `npm run dev` refreshes the archive first (see `predev` in package.json), so the dev
+ * server always starts from a current rate without this fetch needing network of its own.
  *
- * On a successful scrape the cache is refreshed in passing, so running the optimizer
- * locally also keeps it warm.
+ * THE OPTIMIZER USES ONLY THE CURRENT RATE. It has no time dimension — monteCarlo.js
+ * samples one-year-ahead scenario returns and sharpeRatio() is a moment ratio over that
+ * distribution — so there is no historical step to date a rate to. The archive's dated
+ * history exists for the backtest and the live tracker, which do have one.
  *
- * @returns {Promise<{ rate: number, effective: string|null, source: string }>}
+ * @returns {{ rate: number, effective: string|null, source: string }}
  */
-async function resolveBIRate() {
+function resolveBIRate() {
   try {
-    const { current, effective, history } = await fetchBIRateSeries();
-    console.log(`  \u2705 BI-Rate ${(current * 100).toFixed(2)}% (effective ${effective}, ${history.length} decision(s))\n`);
-    try {
-      const prior = existsSync(BI_RATE_CACHE) ? JSON.parse(readFileSync(BI_RATE_CACHE, 'utf8')) : {};
-      writeFileSync(BI_RATE_CACHE, JSON.stringify({
-        ...prior, generated: new Date().toISOString(), current, effective, history,
-      }, null, 2) + '\n');
-    } catch { /* cache refresh is opportunistic — never block the snapshot on it */ }
-    return { rate: current, effective, source: 'live' };
+    const archive = JSON.parse(readFileSync(BI_RATE_ARCHIVE, "utf8"));
+    if (Number.isFinite(archive.current)) {
+      const n = archive.history?.length ?? 0;
+      console.log(`  \u2705 BI-Rate ${(archive.current * 100).toFixed(2)}% (effective ${archive.effective}, archive of ${n} decision(s), refreshed ${archive.generated?.slice(0, 10) ?? "unknown"})\n`);
+      return { rate: archive.current, effective: archive.effective ?? null, source: "archive" };
+    }
+    console.warn(`  \u26a0\ufe0f  BI-Rate archive has no usable \`current\``);
   } catch (err) {
-    console.warn(`  \u26a0\ufe0f  BI-Rate fetch failed (${err.message})`);
+    console.warn(`  \u26a0\ufe0f  BI-Rate archive unreadable (${err.message}) — run \`npm run refresh-bi-rate\``);
   }
 
-  try {
-    const cache = JSON.parse(readFileSync(BI_RATE_CACHE, 'utf8'));
-    if (Number.isFinite(cache.current)) {
-      console.warn(`  \u2193 using cached ${(cache.current * 100).toFixed(2)}% (effective ${cache.effective}, cached ${cache.generated ?? 'unknown'})\n`);
-      return { rate: cache.current, effective: cache.effective ?? null, source: 'cache' };
-    }
-  } catch { /* fall through to the literal */ }
-
   console.warn(`  \u2193 using fallback ${(BI_RATE_FALLBACK * 100).toFixed(2)}%\n`);
-  return { rate: BI_RATE_FALLBACK, effective: null, source: 'fallback' };
+  return { rate: BI_RATE_FALLBACK, effective: null, source: "fallback" };
 }
 
 // ── Main extraction loop ──────────────────────────────────────────────────────
@@ -214,8 +206,8 @@ async function resolveBIRate() {
 async function buildSnapshot() {
   console.log('🚀  IDX Portfolio Snapshot — Yahoo Finance v3\n');
 
-  console.log('  ↳ Fetching BI-Rate (Bank Indonesia) …');
-  const { rate: riskFreeRate, effective: riskFreeRateEffective } = await resolveBIRate();
+  console.log('  ↳ Reading BI-Rate archive …');
+  const { rate: riskFreeRate, effective: riskFreeRateEffective } = resolveBIRate();
 
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
@@ -331,7 +323,7 @@ async function buildSnapshot() {
   const snapshot = {
     generated:    new Date().toISOString(),
     description:  'IDX Large-Cap Live Snapshot — fetched from Yahoo Finance v3',
-    riskFreeRate,          // BI-Rate — live scrape, else bi-rate.json cache (see resolveBIRate)
+    riskFreeRate,          // BI-Rate — read from the bi-rate.json archive (see resolveBIRate)
     riskFreeRateEffective, // BI decision date behind that rate; null when the literal fallback was used
     historyRange: { start: FULL_HISTORY.start, end: weeklyEnd, interval: '1wk' },
     benchmark,
