@@ -25,7 +25,8 @@ Served as a static asset. In `portfolio-app`, Vite's `publicDir: 'data'` exposes
 {
   "generated": "2026-06-22T11:41:15.995Z",   // ISO timestamp of fetch
   "description": "IDX Large-Cap Live Snapshot — fetched from Yahoo Finance v3",
-  "riskFreeRate": 0.0575,                      // BI-Rate (decimal); fallback 0.0575
+  "riskFreeRate": 0.0575,                      // BI-Rate (decimal); scrape → bi-rate.json → 0.0575
+  "riskFreeRateEffective": "2026-06-18",       // BI decision date behind it; null if the literal fallback was used
   "historyRange": { "start": "2011-01-01", "end": "2026-06-19", "interval": "1wk" },
 
   "benchmark": {
@@ -83,7 +84,10 @@ It holds a **methodology matrix × κ**: **300 streams = 10 configs × 6 strateg
 {
   "inception": "2026-06-30",     // index base date (value = 100 here)
   "updated":   "2026-06-30",     // bump to latest effective on every edit
-  "riskFreeRate": 0.0575,        // BI-Rate used by the dashboard's Sharpe
+  "riskFreeRate": 0.0575,        // BI-Rate used by the dashboard's Sharpe. NOT hand-maintained:
+                                 // stamped by merge-rebalances.mjs with the rate the weights were
+                                 // optimized at, and by sync-risk-free-rate.mjs when BI moves midweek
+  "riskFreeRateEffective": "2026-06-18",  // BI decision date behind that rate
   "portfolios": [
     {
       "id":          "max-sharpe@bl-cap-t03", // unique <base>@<configTag>[-k<KK>]
@@ -150,7 +154,37 @@ Capturing **weekly** (not just at each rebalance) keeps the *finest* replay grid
 | Source | Used by | What it provides |
 |--------|---------|------------------|
 | **Yahoo Finance v3** (`yahoo-finance2` npm) | both fetch scripts | weekly/daily `chart()` price history; `quoteSummary` modules: `financialData`, `summaryDetail`, `defaultKeyStatistics`, `assetProfile`, `summaryProfile` |
-| **Bank Indonesia BI-Rate** page | `portfolio-app/data/fetch-snapshot.js` | risk-free rate, scraped from `https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx`; validated to `[BI_RATE_MIN=0.01, BI_RATE_MAX=0.15]`, else `BI_RATE_FALLBACK=0.0575` |
+| **Bank Indonesia BI-Rate** page | `portfolio-app/data/bi-rate.js` (used by both fetch scripts + `refresh-bi-rate.js`) | the **full** policy-rate decision history, scraped from `https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx`; each row validated to `[BI_RATE_MIN=0.01, BI_RATE_MAX=0.15]`. Resolution order: live scrape → committed `bi-rate.json` → `BI_RATE_FALLBACK=0.0575` |
+
+### `portfolio-app/data/bi-rate.json` (generated cache)
+
+The committed BI-Rate history — the fallback tier for every app. Written by `refresh-bi-rate.js`
+(weekday cron) and opportunistically by `fetch-snapshot.js` on a successful scrape. **Never
+hand-edit**; change the scraper instead. Written **only when the rate or history actually changes**,
+so it does not churn on no-op days.
+
+```jsonc
+{
+  "generated": "2026-07-30T09:00:00.000Z",
+  "source":    "https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx",
+  "current":   0.0575,              // = history[0].rate
+  "effective": "2026-06-18",        // = history[0].effective
+  "history": [                      // NEWEST-FIRST; unioned across runs, never truncated
+    { "effective": "2026-06-18", "rate": 0.0575 },
+    { "effective": "2026-05-21", "rate": 0.06 }
+  ]
+}
+```
+
+| Export (`bi-rate.js`) | Returns |
+|-----------------------|---------|
+| `parseBIRateTable(html)` | all `{effective, rate}` rows, newest-first; `[]` if none parse |
+| `fetchBIRateSeries()` | `{current, effective, history}`; **throws** on network/parse failure |
+| `fetchBIRate()` | latest rate as a bare decimal; never throws (falls back) |
+| `rateAsOf(history, isoDate)` | rate in effect **on or before** `isoDate` — never a later one (look-ahead guard). Flat-extends backwards before the series starts |
+| `meanRateOver(history, startISO, endISO)` | time-weighted mean across a window (display only) |
+| `makeRateLookup(history, constant)` | `(isoDate) => rate` with `.mode` of `'series'`/`'constant'`; no history ⇒ always `constant` |
+| `perPeriodRate(annual, ppy)` | `(1+annual)^(1/ppy) − 1` |
 
 The dashboard's daily fetch uses Yahoo `chart()` (not `historical()`) to avoid errors on unsettled recent bars.
 
@@ -246,6 +280,8 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 | `computeTailMetrics(returns, riskFreeRate)` | CVaR₅%, tail gap, P(below r_f) |
 | `buildObjectiveFn({ mode, subsampleScenarios, avgMeans, covMatrix, riskFreeRate, tailPenalty, sigmaRef, currentWeights, turnoverPenalty, realizationShocks })` | Objective for the optimizer |
 | `computeTurnover(wTarget, wCurrent)` | One-way turnover |
+| **`performance.js`** — `sharpeFromExcess(periodRets, rfPeriod, ppy)` | **Canonical ex-post Sharpe.** `mean(e)/sd(e)·√ppy` with `e_t = r_t − rf_t`. `rfPeriod` is a per-period array (dated) or scalar. Imported by the backtester; mirrored in the dashboard's `calcSharpe` |
+| `excessReturns(periodRets, rfPeriod)` | `e_t = r_t − rf_t`; array or scalar `rfPeriod` |
 | `buildRebalanceTrades(assets, targetWeights, currentWeights)` | Current vs. proposed trades |
 
 ### `benchmarkMetrics.js`, `returns.js`, `sectorCaps.js`, `assetSector.js`
@@ -279,7 +315,7 @@ Pure functions; this is the contract the UI, the validation suite, and (for the 
 | `extractDailyReturns(series)` | Daily log-returns from an index series |
 | `calcAnnualizedReturn(series, dpy=252)` / `calcAnnualizedVol(dailyLogReturns, dpy=252)` | Annualized return / volatility |
 | `calcMaxDrawdown(series)` | Max peak-to-trough drawdown |
-| `calcSharpe(annReturn, annVol, riskFreeRate)` | Sharpe from annualized inputs |
+| `calcSharpe(dailyLogReturns, riskFreeRate, dpy=252)` | Annualized Sharpe from per-period excess returns: `mean(e)/sd(e)·√dpy`, `e_t = (e^rp−1) − rf_daily`. Mirror of `sharpeFromExcess` in `portfolio-app/src/math/performance.js` — **keep in sync** |
 | `calcTrackingError(portfolioLogReturns, benchmarkLogReturns, dpy=252)` / `calcInfoRatio(annualizedExcessReturn, trackingError)` | Forward-test metrics vs IHSG |
 
 `priceAlign.js` provides `alignPriceSeries` (date alignment) used by the above. `attribution.js` provides `buildLiveAttribution(portfolio, assets, inception)` — per-holding contribution since inception.

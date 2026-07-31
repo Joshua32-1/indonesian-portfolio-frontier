@@ -11,7 +11,8 @@ my-portfolio-app/
 │   ├── refresh-dashboard.yml       # CI cron: daily lean dashboard snapshot
 │   ├── refresh-views.yml           # CI cron: weekly analyst-view capture (→ view-history/)
 │   ├── weekly-rebalance.yml        # CI cron: automated weekly rebalance (runs optimize.mjs)
-│   └── refresh-backtest.yml        # CI cron: weekly full backtest sweep (→ backtest-results.json)
+│   ├── refresh-backtest.yml        # CI cron: weekly full backtest sweep (→ backtest-results.json)
+│   └── refresh-bi-rate.yml         # CI cron: weekday BI-Rate scrape (→ bi-rate.json, portfolios.json)
 │
 ├── portfolio-app/                  # OPTIMIZER — local research tool
 │   ├── data/
@@ -115,4 +116,5 @@ Each daily bar compounds: `index_t = index_{t-1} · exp(Σ wᵢ(t)·rᵢ,t)`, wh
 - **Dashboard → Vercel.** `vercel.json` sets framework `vite`, install `npm ci`, build `npm run build`, output `dist`, with SPA rewrites. In the Vercel project, **Root Directory = `live-dashboard-portfolio`**. Every `git push` auto-redeploys.
 - **Optimizer:** local only; `npm run build` produces `dist/` but it isn't deployed.
 - **CI cron** (`.github/workflows/refresh-dashboard.yml`): weekdays at **11:00 UTC (18:00 WIB)**, after IDX close. Steps: checkout → Node 20 → `npm ci` in the dashboard → `npm run fetch-snapshot` (with `NODE_OPTIONS=--max-old-space-size=512`) → commit `live-dashboard-portfolio/data/live-market-snapshot.json` **only if changed** → push (triggers Vercel). This is the source of the recurring `chore: refresh IDX daily snapshot` commits.
+- **BI-Rate CI cron** (`.github/workflows/refresh-bi-rate.yml`): **weekdays 09:00 UTC (16:00 WIB)**, after Bank Indonesia's Board-of-Governors announcement window and 2h clear of the dashboard snapshot job so the two don't race on a push to `main`. Steps: checkout → Node 20 (**no `npm ci`** — the scraper needs only global `fetch` + `fs`) → `node portfolio-app/data/refresh-bi-rate.js` → on change, `sync-risk-free-rate.mjs` patches `portfolios.json` → commit both → on a changed rate *or* newly captured history, `gh workflow run refresh-backtest.yml`. Writes only when the rate or history actually moved, so this lands ~8 commits/year (BI's meeting calendar), not ~250. A failed scrape is **not** a job failure — the committed cache is still valid and every consumer keeps resolving from it.
 - **Backtest CI cron** (`.github/workflows/refresh-backtest.yml`): weekly, **Sunday 12:00 UTC (19:00 WIB)**, plus manual dispatch. Steps: checkout → Node 20 → `npm ci` in `backtest-portfolio` → `npm run fetch` (rebuilds the gitignored `backtest-history.json` on the runner) → `npm run backtest` (full sweep, `NODE_OPTIONS=--max-old-space-size=4096`, 90-min timeout) → commit `backtest-portfolio/public/backtest-results.json` **only if changed**. Heavy (~45–60 min), hence weekly rather than daily. Per-prior variant files (`…-shrunk`/`…-equal`) are not regenerated here.

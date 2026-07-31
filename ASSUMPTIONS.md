@@ -13,8 +13,19 @@
 
 ## Risk-free rate
 
-- `r_f` = **Bank Indonesia BI-Rate**, scraped live at snapshot time, validated to `[1%, 15%]`, else **fallback 5.75%** (`BI_RATE_FALLBACK`).
+- `r_f` = **Bank Indonesia BI-Rate**. Single source of truth: [`portfolio-app/data/bi-rate.js`](portfolio-app/data/bi-rate.js) (scrape + pure lookups) and the committed cache `portfolio-app/data/bi-rate.json`, refreshed weekdays by `refresh-bi-rate.yml`.
+- **Resolution order** wherever a rate is needed: live scrape → committed `bi-rate.json` → `BI_RATE_FALLBACK = 5.75%`. Parsed values are validated to `[1%, 15%]`. The cache tier means a stalled BI backend degrades to the last cron-verified rate rather than a literal frozen at authoring time.
 - The same `r_f` is used for Sharpe, the BL equilibrium, and the "probability below risk-free" tail metric.
+
+**Per app:**
+
+| App | What it uses | Refreshed by |
+|-----|--------------|--------------|
+| Optimizer | Latest rate, written into the snapshot as `riskFreeRate` (+ `riskFreeRateEffective`). Seeds the UI slider, which the analyst may override. | Every `fetch-snapshot` run — `predev`/`build`, so local dev is always live |
+| Live tracker | `portfolios.json → riskFreeRate`, stamped with the rate the weights were **actually optimized at** (modal value across the config emits) | `merge-rebalances.mjs` on Sunday; `sync-risk-free-rate.mjs` on any weekday the rate moves |
+| Backtest | A **dated series** — each rebalance is scored at the rate in effect on that date (`rateAsOf`), never at today's | `refresh-backtest.yml` weekly, plus a same-day dispatch when the weekday cron sees the series change |
+
+- **Backtest coverage caveat:** if the scraped history starts after the backtest window does, `rateAsOf` flat-extends the oldest known rate backwards and the engine pushes a warning naming the uncovered span. Set `RISK_FREE_RATE=<decimal>` to force a flat rate instead.
 
 ## Annualization
 

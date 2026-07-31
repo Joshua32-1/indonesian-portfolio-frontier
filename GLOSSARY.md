@@ -29,7 +29,7 @@ Quant and IDX terms used across this repo. Each entry: a one-line definition and
 - **Prior mode** — which equilibrium prior the BL blend anchors to: `cap` (market-cap, identity/default), `equal` (1/n), or `shrunk` (0.5·cap + 0.5·equal). → `applyPriorMode`, `blackLitterman.js`.
 - **Risk contribution** — each asset's share of total portfolio risk (sums to 1). → `computeRiskContributions`.
 - **Robust portfolio (★)** — the tail-aware fixed allocation; the recommended implementable output. → `monteCarlo.js`.
-- **Sharpe ratio** — `(μ_p − r_f)/σ_p`, excess return per unit of risk. → `sharpeRatio`.
+- **Sharpe ratio** — `(μ_p − r_f)/σ_p`, excess return per unit of risk. → `sharpeRatio` (optimizer, forward-looking on scenario moments). **Ex-post** (backtest + live tracker) it is estimated from the realized per-period excess series as `mean(e_t)/sd(e_t) × √ppy`, where `e_t = r_t − rf_t` and `rf_t` is the BI-Rate in effect during period *t*. → [`performance.js`](portfolio-app/src/math/performance.js). Note this does **not** reconstruct from the displayed annualized return and vol — those stay geometric.
 - **Stitched index** — a continuously-compounding performance index that never resets on rebalance. → `buildTrackerSeries`, dashboard.
 - **Tail gap** — `E[r] − CVaR₅%`; the quantity scaled by λ in the objective. → `computeTailMetrics`.
 - **Tail penalty (λ)** — weight on tail risk in the objective; default 0.10. Higher λ = more downside-averse. → `DEFAULT_TAIL_PENALTY`.

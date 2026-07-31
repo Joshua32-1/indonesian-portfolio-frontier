@@ -21,7 +21,7 @@ Use read-only inspection and `node`/`jq`-style checks (via Bash) — do **not** 
 
 - **Snapshot schema (rich):** top-level `generated`, `riskFreeRate` (decimal in [0.01, 0.15]), `historyRange`, `benchmark` (`^JKSE`, priceHistory dates/adjClose equal length), `assets[]` with `meta` (currentPrice, dividendYield, avgDailyTurnover, dailyReturns, recentDailyVol, volHalfLife) and `forwardEstimates` (low ≤ mean ≤ high, totalAnalysts ≥ 0). Dates ascending; no NaN/Infinity.
 - **Snapshot schema (lean):** bare tickers, daily `priceHistory`; null `adjClose` bars dropped; `dates`/`adjClose` aligned.
-- **Fetch logic:** `universe.js` `UNIVERSE_JK` list well-formed `.JK`; quoteSummary modules present; BI-Rate scrape validates to `[BI_RATE_MIN, BI_RATE_MAX]` and falls back to `BI_RATE_FALLBACK=0.0575`. Dashboard fetch uses `chart()` (not `historical()`).
+- **Fetch logic:** `universe.js` `UNIVERSE_JK` list well-formed `.JK`; quoteSummary modules present; BI-Rate resolution follows live scrape → committed `portfolio-app/data/bi-rate.json` → `BI_RATE_FALLBACK=0.0575`, with each parsed row validated to `[BI_RATE_MIN, BI_RATE_MAX]` (all in `portfolio-app/data/bi-rate.js`). `bi-rate.json` must stay newest-first with no duplicate `effective` dates, and `current`/`effective` must equal `history[0]`. Dashboard fetch uses `chart()` (not `historical()`).
 - **`portfolios.json` contract (most common source of bugs):**
   - Each rebalance's weights **sum to ≈ 1.00** (flag deviations > ~0.005).
   - Tickers are **bare** (`BBCA`), not `.JK`, and **every ticker exists** in the lean snapshot's assets.
