@@ -302,6 +302,29 @@ export default function App() {
     setGridProgress({ done, total });
   };
 
+  // Is the reference artifact still about the names you are looking at?
+  //
+  // It carries the universe it was built over, but nothing used to check it. That was
+  // survivable while a weekly cron rebuilt it; now that it only changes when you press
+  // Regenerate, an artifact can sit for months describing a universe that no longer exists —
+  // silently, because every number in it still renders perfectly.
+  //
+  // Two different problems, and the second is the serious one:
+  //   drifted  — built over a different selection than you have toggled (often deliberate)
+  //   orphaned — cites names that are no longer in backtest-history.json at all, i.e.
+  //              universe.js changed underneath it. Those weights can never be reproduced.
+  const refUniverseDiff = useMemo(() => {
+    const built = refCurrent?.ok && Array.isArray(refCurrent.universe) ? refCurrent.universe : null;
+    if (!built || !data) return null;
+    const builtSet = new Set(built);
+    const known = new Set(data.tickers.map(t => t.ticker));
+    const orphaned = built.filter(t => !known.has(t));
+    const missing = [...included].filter(t => !builtSet.has(t)); // selected but not in the artifact
+    const extra = built.filter(t => !included.has(t));           // in the artifact but not selected
+    if (!orphaned.length && !missing.length && !extra.length) return null;
+    return { orphaned, missing, extra };
+  }, [refCurrent, data, included]);
+
   const newestIncluded = useMemo(() => {
     if (!data) return null;
     let best = null, bestDate = '0000-00-00';
@@ -612,6 +635,32 @@ export default function App() {
                   : (refProv.start ? `${refProv.start} → ${refProv.end}` : undefined)}
             />
             {refProv.start && <Stat label="WINDOW" value={`${refProv.start} → ${refProv.end}`} />}
+          </div>
+        )}
+
+        {refUniverseDiff && (
+          <div style={{
+            marginTop: 10, fontSize: 11, lineHeight: 1.7, padding: '8px 11px', borderRadius: 6,
+            border: `1px solid ${refUniverseDiff.orphaned.length ? '#7F1D1D' : '#3B2E5A'}`,
+            background: refUniverseDiff.orphaned.length ? '#1A0B0B' : '#150F2E',
+            color: refUniverseDiff.orphaned.length ? '#FCA5A5' : '#C4B5FD',
+          }}>
+            {refUniverseDiff.orphaned.length > 0 && (
+              <div style={{ marginBottom: refUniverseDiff.missing.length || refUniverseDiff.extra.length ? 6 : 0 }}>
+                <b>⚠️ This artifact predates a universe change.</b> It was built over{' '}
+                <b>{refUniverseDiff.orphaned.join(', ')}</b>, which {refUniverseDiff.orphaned.length === 1 ? 'is' : 'are'} no
+                longer in <code style={refCode}>universe.js</code>. Its weights cannot be reproduced from the current
+                history — <b>regenerate before citing it</b>.
+              </div>
+            )}
+            {(refUniverseDiff.missing.length > 0 || refUniverseDiff.extra.length > 0) && (
+              <div>
+                Built over a different set than you have selected
+                {refUniverseDiff.missing.length > 0 && <> · selected but <b>not</b> in it: {refUniverseDiff.missing.join(', ')}</>}
+                {refUniverseDiff.extra.length > 0 && <> · in it but not selected: {refUniverseDiff.extra.join(', ')}</>}
+                . Hit <b>Regenerate</b> to rebuild over your selection.
+              </div>
+            )}
           </div>
         )}
 
