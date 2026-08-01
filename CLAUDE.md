@@ -20,7 +20,8 @@ The apps **share data contracts but no code**. The optimizer is the source of we
 ```bash
 npm run dev              # predev auto-runs fetch-snapshot, then Vite dev server (port 5173)
 npm run build            # fetch-snapshot && vite build
-npm run fetch-snapshot   # node data/fetch-snapshot.js — rebuild ~1MB snapshot from Yahoo + BI-Rate
+npm run fetch-snapshot   # node data/fetch-snapshot.js — rebuild ~1MB snapshot from Yahoo + BI-Rate (research universe)
+npm run fetch-snapshot:forward   # same, but the PINNED forward-test universe (required before optimize.mjs)
 npm run refresh-sectors  # node data/refresh-sectors.js — update sector labels only (fast, no price refetch)
 npm run refresh-bi-rate  # node data/refresh-bi-rate.js — update the BI-Rate ARCHIVE (data/bi-rate.json)
                          #   …--import f.{json,csv}  fold in an operator-supplied history file
@@ -57,7 +58,14 @@ node scripts/sync-risk-free-rate.mjs      # push the cached BI-Rate into portfol
 
 **Automated (root `.github/workflows/`):** `refresh-dashboard.yml` (daily lean snapshot), `refresh-bi-rate.yml` (**weekday BI-Rate archive update** → `bi-rate.json` + `portfolios.json` — exists **for the live forward test only**; the optimizer and backtest read the archive at `npm run dev` and need no cron), `refresh-views.yml` (weekly analyst-view capture), `weekly-rebalance.yml` (weekly rebalance as a **parallel config matrix** over all 10 configs — `optimize.mjs --emit` per config → `merge-rebalances.mjs` appends κ=0 rows and κ-expands to 300 streams → **auto-commits to `main`**, no PR). **The backtest has no workflow** — it is a local research tool: `npm run dev` refetches prices and the Regenerate button rebuilds the precompute, so nothing about it is committed or CI-built.
 
-**Ticker universe:** the investable list lives once in [`portfolio-app/data/universe.js`](portfolio-app/data/universe.js) (`UNIVERSE_JK`, `.JK` suffix) and is imported by all three fetch scripts. The dashboard fetch unions in any ticker still held in `portfolios.json` so removed names stay tracked; the optimizer/backtest use the canonical list. See the [`add-ticker`](.claude/skills/add-ticker/SKILL.md) skill.
+**Ticker universe — two lists, one file** ([`portfolio-app/data/universe.js`](portfolio-app/data/universe.js), `.JK` suffix):
+
+| Export | Role | Read by | Takes effect |
+|--------|------|---------|--------------|
+| `UNIVERSE_JK` | **Research** universe — edit freely | optimizer app, backtester | Next `npm run dev` in either app — `portfolio-app`'s predev always refetches; `backtest-portfolio`'s `fetch-if-stale` refetches because the ticker set changed |
+| `FORWARD_TEST_UNIVERSE_JK` | **Pinned production** universe (25 names, frozen) | `optimize.mjs`, dashboard fetch, `fetch-snapshot.js --forward-test` | Only by deliberately editing the frozen list |
+
+**Editing `UNIVERSE_JK` never moves the live forward test.** `optimize.mjs` drops snapshot names outside the pinned list and *aborts* if a pinned name is missing; the dashboard fetch prices the pinned list ∪ any ticker still held in `portfolios.json`. Changing the pinned list starts a new experiment — see [FORWARD-TEST.md](FORWARD-TEST.md#changing-the-pinned-universe). Use `npm run fetch-snapshot:forward` for any snapshot feeding the forward test (both CI workflows do). See the [`add-ticker`](.claude/skills/add-ticker/SKILL.md) skill.
 
 ## Golden rules
 

@@ -17,6 +17,25 @@ Each stream carries the fields `{ id, base, methodology, prior, tau, kappa, labe
 
 This is a genuine **out-of-sample** test — the optimizer was built and calibrated before 2026-06-30, and no in-sample data after that date is used to tune it.
 
+### The universe is pinned
+
+All 300 streams run on **`FORWARD_TEST_UNIVERSE_JK`** — the 25 names the test launched on, frozen in [`portfolio-app/data/universe.js`](portfolio-app/data/universe.js). The research list `UNIVERSE_JK` (optimizer app + backtester) is a **separate export** and editing it does not touch the forward test:
+
+- [`optimize.mjs`](portfolio-app/scripts/optimize.mjs) filters the rich snapshot to the pinned list, logs any names it dropped, and **aborts** if a pinned name is missing rather than quietly optimizing over a smaller opportunity set.
+- [`fetch-daily-snapshot.mjs`](live-dashboard-portfolio/scripts/fetch-daily-snapshot.mjs) prices the pinned list ∪ every ticker still held in `portfolios.json`.
+- `weekly-rebalance.yml` and `refresh-views.yml` build their snapshot with `npm run fetch-snapshot:forward`. The point-in-time view archive is written **only** in that mode, so a research fetch can't claim a week's write-once slot with the wrong ticker set.
+
+Because the streams differ only in methodology and κ, a mid-flight universe change would confound all 300 simultaneously — the cross-sectional comparison would stay valid at any instant, but a since-inception ranking would splice two experiments.
+
+### Changing the pinned universe
+
+Editing `FORWARD_TEST_UNIVERSE_JK` **starts a new experiment**. If you do it anyway:
+
+1. **Check price history first.** Every name must have bars back to `portfolios.json → inception`. The dashboard aligns prices by **date intersection** ([`priceAlign.js`](live-dashboard-portfolio/src/math/priceAlign.js)), and `optimize.mjs` emits every pinned ticker including **zero** weights — so one name whose history starts late silently truncates and **rebases every stream's index to 100** at its first bar. A name with full history is a no-op.
+2. **Refresh the lean snapshot before the next Sunday.** `optimize.mjs` validates weight-map keys against the *committed* `live-dashboard-portfolio/data/live-market-snapshot.json`; the rebalance workflow does not rebuild it. If a pinned name is missing there, all 10 matrix jobs fail and the merge job is skipped — no rebalance that week, no visible error. Dispatch `refresh-dashboard.yml`, or run `cd live-dashboard-portfolio && npm run fetch-snapshot` and commit.
+3. **Removals stay tracked but can freeze a stream.** The held-ticker union keeps pricing a removed name, and κ>0 streams keep holding it for weeks (the blend decays it at (1−κ)/week). If it is later delisted or suspended, its date gaps truncate **every stream that ever held it**; if it vanishes from the snapshot entirely, its weight silently contributes zero return at a <100% invested base.
+4. Record the change and its date here, and treat pre/post segments as separate windows.
+
 ---
 
 ## Hypotheses and success criteria
@@ -42,7 +61,8 @@ Rebalances run **automatically** — no local optimizer run needed.
 runs Sundays at 12:00 UTC (19:00 WIB) — the new weights become effective on Monday's
 first trading bar — as a **parallel config matrix**:
 
-1. Fetches a fresh optimizer snapshot (Yahoo prices, analyst targets, BI-Rate).
+1. Fetches a fresh optimizer snapshot (Yahoo prices, analyst targets, BI-Rate) with
+   `npm run fetch-snapshot:forward` — the **pinned** universe, not the research list.
 2. Runs [`portfolio-app/scripts/optimize.mjs`](portfolio-app/scripts/optimize.mjs)
    once per **config** — all 10 (`pert` + BL × prior`{cap,shrunk,equal}` × τ`{0.01,0.03,0.10}`) —
    each with `--emit`, writing **only its own 6 κ=0 streams** to a per-config artifact (so

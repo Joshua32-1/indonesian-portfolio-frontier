@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "fetch-snapshot": "node data/fetch-snapshot.js",
+    "fetch-snapshot:forward": "node data/fetch-snapshot.js --forward-test",
     "refresh-sectors": "node data/refresh-sectors.js",
     "refresh-bi-rate": "node data/refresh-bi-rate.js",
     "optimize": "node scripts/optimize.mjs",

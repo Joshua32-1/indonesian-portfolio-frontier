@@ -63,9 +63,11 @@ jobs:
       - name: Install optimizer deps
         working-directory: portfolio-app
         run: npm ci
-      - name: Fetch fresh optimizer snapshot (Yahoo + BI-Rate)
+      # PINNED universe: --forward-test builds the snapshot from FORWARD_TEST_UNIVERSE_JK,
+      # not the research list UNIVERSE_JK, so research edits never move production.
+      - name: Fetch fresh optimizer snapshot (Yahoo + BI-Rate, pinned universe)
         working-directory: portfolio-app
-        run: npm run fetch-snapshot
+        run: npm run fetch-snapshot:forward
         env:
           NODE_OPTIONS: '--max-old-space-size=2048'
       - name: Optimize ${{ matrix.config.tag }} → emit artifact
