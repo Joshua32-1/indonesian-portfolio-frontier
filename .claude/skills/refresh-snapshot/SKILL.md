@@ -11,12 +11,13 @@ Two snapshots exist; pick the target deliberately — they use different scripts
 
 ```bash
 cd portfolio-app
-npm run fetch-snapshot          # node data/fetch-snapshot.js
+npm run fetch-snapshot          # research universe (UNIVERSE_JK)
+npm run fetch-snapshot:forward  # PINNED forward-test universe — required before optimize.mjs
 # fast path (sector labels only, no price refetch):
 # npm run refresh-sectors
 ```
 
-Writes `portfolio-app/data/live-market-snapshot.json`.
+Writes `portfolio-app/data/live-market-snapshot.json` either way — the flag only selects which ticker list is fetched (see `portfolio-app/data/universe.js`). Use `:forward` for anything feeding the live forward test; `optimize.mjs` aborts if a pinned name is missing from the snapshot. The point-in-time `view-history/` capture is written **only** in `:forward` mode.
 
 ## Dashboard (lean snapshot, ~14 KB, daily adjusted closes only — normally CI does this)
 

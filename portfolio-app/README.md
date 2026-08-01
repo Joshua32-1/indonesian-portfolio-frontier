@@ -159,7 +159,7 @@ The IHSG benchmark (`^JKSE`) weekly history is also fetched and stored separatel
 
 ### Operational notes
 
-- To change the universe, edit `UNIVERSE_JK` in [`data/universe.js`](data/universe.js) (shared by all three apps' fetch scripts) and re-run `npm run fetch-snapshot`.
+- To change the **research** universe (this app + the backtester), edit `UNIVERSE_JK` in [`data/universe.js`](data/universe.js) and re-run `npm run fetch-snapshot`. This does **not** affect the live forward test, which is pinned to the separate `FORWARD_TEST_UNIVERSE_JK` export — see [FORWARD-TEST.md](../FORWARD-TEST.md#the-universe-is-pinned). Snapshots feeding the forward test are built with `npm run fetch-snapshot:forward`.
 - `refresh-sectors.js` re-fetches only the `assetProfile`/`summaryProfile` modules and updates industry labels without touching price or analyst data. Use it when sector classifications drift without a price refresh.
 - Sector label resolution — including fallback logic for tickers Yahoo misclassifies — lives in [`src/math/assetSector.js`](src/math/assetSector.js).
 
@@ -619,7 +619,7 @@ portfolio-app/
 ├── optimizer-config.json        Headless-run defaults (methodology, factorConfig, MC iterations)
 │
 ├── data/
-│   ├── universe.js              Canonical ticker universe (UNIVERSE_JK) — shared by all 3 apps
+│   ├── universe.js              UNIVERSE_JK (research) + FORWARD_TEST_UNIVERSE_JK (pinned, live)
 │   ├── fetch-snapshot.js        Yahoo Finance fetch; writes live-market-snapshot.json
 │   ├── refresh-sectors.js       Lightweight sector/label refresh (no price re-fetch)
 │   ├── view-history/            Weekly point-in-time analyst-view captures (for κ-replay)

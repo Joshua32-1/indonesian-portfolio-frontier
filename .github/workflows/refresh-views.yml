@@ -34,9 +34,12 @@ jobs:
         working-directory: portfolio-app
         run: npm ci
 
-      - name: Fetch rich snapshot (writes trimmed view-history)
+      # Pinned universe — the archive is forward-test provenance, so it must cover
+      # exactly FORWARD_TEST_UNIVERSE_JK. (fetch-snapshot.js only writes view-history
+      # in --forward-test mode, so a research fetch can't claim the week's slot.)
+      - name: Fetch rich snapshot (pinned universe; writes trimmed view-history)
         working-directory: portfolio-app
-        run: npm run fetch-snapshot
+        run: npm run fetch-snapshot:forward
         env:
           NODE_OPTIONS: '--max-old-space-size=512'
 

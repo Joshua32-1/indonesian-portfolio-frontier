@@ -1,8 +1,8 @@
 /**
  * fetch-daily-snapshot.mjs
  * ─────────────────────────────────────────────────────────────────────────────
- * Fetches daily adjusted-close price history + daily dollar-volume for IDX
- * tickers and IHSG from Yahoo Finance and writes a lean snapshot to
+ * Fetches daily adjusted-close price history + daily dollar-volume for the PINNED
+ * forward-test tickers and IHSG from Yahoo Finance and writes a lean snapshot to
  * data/live-market-snapshot.json. dollarVol (raw close × volume, IDR) feeds the
  * dashboard's forward liquidity-aware net-of-cost model (trailing-63 ADV), the
  * same field+semantics the backtester's history carries.
@@ -21,7 +21,7 @@ import YahooFinance from 'yahoo-finance2';
 import { writeFileSync, readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { UNIVERSE_JK, toJK } from '../../portfolio-app/data/universe.js';
+import { FORWARD_TEST_UNIVERSE_JK, toJK } from '../../portfolio-app/data/universe.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -51,11 +51,13 @@ function heldTickers() {
 }
 
 /**
- * Fetch universe = canonical UNIVERSE_JK ∪ every held ticker in portfolios.json.
- * The forward-test tracker therefore prices BOTH newly-added names and old names
- * that have since left the canonical list — see universe.js.
+ * Fetch universe = PINNED FORWARD_TEST_UNIVERSE_JK ∪ every held ticker in
+ * portfolios.json. The tracker deliberately ignores the research list
+ * (UNIVERSE_JK), so editing it never adds or removes names from the live forward
+ * test — see universe.js. The held-ticker union only ever ADDS names already
+ * carried in past rebalances, so their price series keeps flowing.
  */
-const TICKERS = [...new Set([...UNIVERSE_JK, ...heldTickers()])];
+const TICKERS = [...new Set([...FORWARD_TEST_UNIVERSE_JK, ...heldTickers()])];
 
 const BENCHMARK_TICKER = '^JKSE';
 

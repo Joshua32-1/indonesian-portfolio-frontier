@@ -16,7 +16,12 @@
  *   node scripts/optimize.mjs [--effective YYYY-MM-DD] [--dry-run]
  *   REBALANCE_EFFECTIVE=2026-06-29 node scripts/optimize.mjs
  *
- * Reads:  portfolio-app/data/live-market-snapshot.json   (rich snapshot — run fetch-snapshot first)
+ * UNIVERSE: pinned to FORWARD_TEST_UNIVERSE_JK (data/universe.js), NOT the research
+ * list UNIVERSE_JK. Snapshot names outside the pinned list are dropped; a pinned name
+ * absent from the snapshot aborts the run. Build the input snapshot with
+ * `npm run fetch-snapshot:forward`.
+ *
+ * Reads:  portfolio-app/data/live-market-snapshot.json   (rich snapshot — run fetch-snapshot:forward first)
  *         portfolio-app/optimizer-config.json            (methodology config)
  *         live-dashboard-portfolio/data/live-market-snapshot.json (lean — ticker validation)
  * Writes: live-dashboard-portfolio/data/portfolios.json  (append-only)
@@ -31,6 +36,7 @@ import { DEFAULT_FACTOR_CONFIG } from '../src/math/factorConfig.js';
 import { DEFAULT_SIM_CONFIG } from '../src/math/simConfig.js';
 import { buildSectorCapsForSectors } from '../src/math/sectorCaps.js';
 import { BI_RATE_FALLBACK } from '../data/bi-rate.js';
+import { FORWARD_TEST_UNIVERSE_JK, toBare } from '../data/universe.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT  = join(__dirname, '..');
@@ -76,14 +82,32 @@ if (!existsSync(SNAPSHOT)) {
 }
 const snap = JSON.parse(readFileSync(SNAPSHOT, 'utf8'));
 const cfg  = existsSync(CONFIG) ? JSON.parse(readFileSync(CONFIG, 'utf8')) : {};
-const assets = snap.assets ?? [];
 const riskFreeRate = snap.riskFreeRate ?? BI_RATE_FALLBACK;
 // BI decision date behind that rate — carried into the emit so the dashboard can show
 // the as-of alongside the number instead of an undated "BI-Rate".
 const riskFreeRateEffective = snap.riskFreeRateEffective ?? null;
 
-if (assets.length < 2) {
-  console.error('Snapshot has fewer than 2 assets — nothing to optimize.');
+// ── Pin to the forward-test universe ────────────────────────────────────────
+// The live forward test runs on FORWARD_TEST_UNIVERSE_JK and nothing else, so the
+// research list (UNIVERSE_JK) can be edited freely without moving production.
+// Extra names in the snapshot are dropped; a MISSING one aborts — silently
+// optimizing over 24 of 25 names would change the opportunity set for all 300
+// streams at once, which is exactly what the pin exists to prevent.
+const FORWARD_TEST_TICKERS = FORWARD_TEST_UNIVERSE_JK.map(toBare);
+const forwardTestSet = new Set(FORWARD_TEST_TICKERS);
+
+const snapshotAssets = snap.assets ?? [];
+const assets = snapshotAssets.filter(a => forwardTestSet.has(a.ticker));
+const dropped = snapshotAssets.filter(a => !forwardTestSet.has(a.ticker)).map(a => a.ticker);
+
+const present = new Set(assets.map(a => a.ticker));
+const missing = FORWARD_TEST_TICKERS.filter(t => !present.has(t));
+if (missing.length) {
+  console.error(
+    `Snapshot is missing ${missing.length} pinned forward-test ticker(s): ${missing.join(', ')}\n` +
+    'The rich snapshot was built from the research universe. Rebuild it with the pinned list:\n' +
+    '  cd portfolio-app && npm run fetch-snapshot:forward',
+  );
   process.exit(1);
 }
 
@@ -119,7 +143,10 @@ const sectorCaps     = cfg.sectorCaps ?? buildSectorCapsForSectors(sectors);
 
 console.log('─── Optimizer config ───────────────────────────────────────');
 console.log(`  effective:      ${effective}`);
-console.log(`  assets:         ${assets.length}  ·  rf=${(riskFreeRate * 100).toFixed(2)}%`);
+console.log(`  assets:         ${assets.length}  ·  rf=${(riskFreeRate * 100).toFixed(2)}%  ·  universe=FORWARD_TEST_UNIVERSE_JK (pinned)`);
+if (dropped.length) {
+  console.log(`  dropped:        ${dropped.length} snapshot name(s) outside the pinned universe — ${dropped.join(', ')}`);
+}
 console.log(`  iterations:     ${iterations.toLocaleString('en-US')}`);
 console.log(`  corr window:    ${corrStart} → ${corrEnd}  ·  volHalfLife=${volHalfLife}`);
 console.log(`  factor model:   ${factorConfig.useFactorModel ? 'ON (BL τ=' + factorConfig.tau + ')' : 'OFF (legacy PERT)'}`);

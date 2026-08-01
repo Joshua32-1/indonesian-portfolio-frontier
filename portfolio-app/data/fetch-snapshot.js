@@ -23,7 +23,7 @@ import {
   VOL_LOOKBACK_DAYS,
 } from '../src/math/matrixEngine.js';
 import { resolveSectorFromQuoteSummary } from '../src/math/assetSector.js';
-import { UNIVERSE_JK } from './universe.js';
+import { UNIVERSE_JK, FORWARD_TEST_UNIVERSE_JK } from './universe.js';
 import { BI_RATE_FALLBACK } from './bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -36,8 +36,20 @@ const JAKARTA_TZ = 'Asia/Jakarta';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
+/**
+ * Which universe to fetch — see ./universe.js.
+ *   default          → UNIVERSE_JK (research; `npm run dev` / `npm run build`)
+ *   --forward-test   → FORWARD_TEST_UNIVERSE_JK (pinned production list)
+ *
+ * The forward-test workflows (weekly-rebalance, refresh-views) run in forward-test
+ * mode, so editing UNIVERSE_JK never changes what the live forward test optimizes
+ * over. `SNAPSHOT_UNIVERSE=forward-test` is an env equivalent of the flag.
+ */
+const FORWARD_TEST_MODE =
+  process.argv.includes('--forward-test') || process.env.SNAPSHOT_UNIVERSE === 'forward-test';
+
 /** IDX tickers to include in the snapshot — single source of truth in ./universe.js. */
-const TICKERS = UNIVERSE_JK;
+const TICKERS = FORWARD_TEST_MODE ? FORWARD_TEST_UNIVERSE_JK : UNIVERSE_JK;
 
 /** Yahoo Finance quoteSummary modules used per ticker. */
 const QUOTE_SUMMARY_MODULES = [
@@ -204,7 +216,10 @@ function resolveBIRate() {
 // ── Main extraction loop ──────────────────────────────────────────────────────
 
 async function buildSnapshot() {
-  console.log('🚀  IDX Portfolio Snapshot — Yahoo Finance v3\n');
+  console.log('🚀  IDX Portfolio Snapshot — Yahoo Finance v3');
+  console.log(FORWARD_TEST_MODE
+    ? `    universe: FORWARD_TEST_UNIVERSE_JK (pinned, ${TICKERS.length} names)\n`
+    : `    universe: UNIVERSE_JK (research, ${TICKERS.length} names) — pass --forward-test for the pinned list\n`);
 
   console.log('  ↳ Reading BI-Rate archive …');
   const { rate: riskFreeRate, effective: riskFreeRateEffective } = resolveBIRate();
@@ -345,6 +360,16 @@ async function buildSnapshot() {
   // Write-once: a later fetch in the same week must NOT replace the earlier
   // capture, or the archived views drift toward newer analyst targets and
   // contaminate a future κ-replay with look-ahead.
+  //
+  // FORWARD-TEST MODE ONLY. This archive is forward-test provenance, so it must
+  // cover exactly the pinned universe. A research fetch (a changed UNIVERSE_JK)
+  // would otherwise claim the week's write-once slot with the wrong ticker set and
+  // lock the real capture out — see universe.js.
+  if (!FORWARD_TEST_MODE) {
+    console.log('🗄️   Research fetch — skipping the point-in-time view capture (forward-test mode only)\n');
+    return;
+  }
+
   const viewSnapshot = {
     asOf:         weeklyEnd || new Date().toISOString().slice(0, 10),
     generated:    snapshot.generated,

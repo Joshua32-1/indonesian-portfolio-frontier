@@ -15,7 +15,7 @@ my-portfolio-app/
 │
 ├── portfolio-app/                  # OPTIMIZER — local research tool
 │   ├── data/
-│   │   ├── universe.js              # UNIVERSE_JK — single source of truth for the ticker list
+│   │   ├── universe.js              # UNIVERSE_JK (research) + FORWARD_TEST_UNIVERSE_JK (pinned, live)
 │   │   ├── fetch-snapshot.js        # Yahoo + BI-Rate → live-market-snapshot.json (~1MB)
 │   │   ├── refresh-sectors.js       # update sector labels only
 │   │   ├── live-market-snapshot.json (generated)

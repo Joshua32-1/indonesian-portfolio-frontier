@@ -10,6 +10,10 @@
  * SEQUENTIAL (never parallel → no 8 GB OOM). RESUMABLE: a config whose streams are
  * already seeded for EFFECTIVE is skipped WITHOUT recomputing (cheap resume).
  *
+ * Build the rich snapshot with the PINNED universe first — optimize.mjs aborts if a
+ * FORWARD_TEST_UNIVERSE_JK name is missing from it:
+ *   cd portfolio-app && npm run fetch-snapshot:forward
+ *
  * Launch DETACHED so it survives the session closing:
  *   cd portfolio-app
  *   nohup node scripts/seed-forward-matrix.mjs > data/.seed-progress.log 2>&1 &
