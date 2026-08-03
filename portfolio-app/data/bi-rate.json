@@ -1,6 +1,6 @@
 {
   "_comment": "Bank Indonesia policy-rate ARCHIVE — the single file all three apps resolve r_f from. Assembled by portfolio-app/data/refresh-bi-rate.js from bi-rate-seed.js (compiled history), the rows already here (never dropped), and a live bi.go.id scrape. Rows are newest-first and carry `source` (compiled | imported | bi.go.id) and `instrument` (BI_RATE_LEGACY before the 2016-08-19 switch, BI7DRR after). NEVER hand-edit: re-run the script, or feed a file in with --import. Optimizer reads `current`; backtest and live tracker read `history`.",
-  "generated": "2026-07-31T05:50:21.439Z",
+  "generated": "2026-08-03T12:29:36.846Z",
   "source": "https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx",
   "seed": {
     "kind": "compiled",
@@ -10,21 +10,76 @@
   },
   "coverage": {
     "first": "2011-10-11",
-    "last": "2026-06-18",
-    "decisions": 50,
+    "last": "2026-07-22",
+    "decisions": 59,
     "bySource": {
-      "compiled": 50
+      "compiled": 49,
+      "bi.go.id": 10
     },
     "maxGapDays": 551
   },
   "current": 0.0575,
-  "effective": "2026-06-18",
+  "effective": "2026-07-22",
   "history": [
+    {
+      "effective": "2026-07-22",
+      "rate": 0.0575,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
     {
       "effective": "2026-06-18",
       "rate": 0.0575,
       "instrument": "BI7DRR",
-      "source": "compiled"
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2026-06-09",
+      "rate": 0.055,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2026-05-20",
+      "rate": 0.0525,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2026-04-22",
+      "rate": 0.0475,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2026-03-17",
+      "rate": 0.0475,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2026-02-19",
+      "rate": 0.0475,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2026-01-21",
+      "rate": 0.0475,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2025-12-17",
+      "rate": 0.0475,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
+    {
+      "effective": "2025-11-19",
+      "rate": 0.0475,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
     },
     {
       "effective": "2025-09-17",
