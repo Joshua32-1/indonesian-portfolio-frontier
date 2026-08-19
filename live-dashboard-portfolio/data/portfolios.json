@@ -70810,8 +70810,12 @@
       ]
     }
   ],
-  "riskFreeRateEffective": "2026-07-22",
+  "riskFreeRateEffective": "2026-08-19",
   "riskFreeRateSeries": [
+    {
+      "effective": "2026-08-19",
+      "rate": 0.0575
+    },
     {
       "effective": "2026-07-22",
       "rate": 0.0575

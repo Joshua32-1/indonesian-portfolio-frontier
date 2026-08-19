@@ -1,6 +1,6 @@
 {
   "_comment": "Bank Indonesia policy-rate ARCHIVE — the single file all three apps resolve r_f from. Assembled by portfolio-app/data/refresh-bi-rate.js from bi-rate-seed.js (compiled history), the rows already here (never dropped), and a live bi.go.id scrape. Rows are newest-first and carry `source` (compiled | imported | bi.go.id) and `instrument` (BI_RATE_LEGACY before the 2016-08-19 switch, BI7DRR after). NEVER hand-edit: re-run the script, or feed a file in with --import. Optimizer reads `current`; backtest and live tracker read `history`.",
-  "generated": "2026-08-03T12:29:36.846Z",
+  "generated": "2026-08-19T09:37:41.874Z",
   "source": "https://www.bi.go.id/en/statistik/indikator/bi-rate.aspx",
   "seed": {
     "kind": "compiled",
@@ -10,17 +10,23 @@
   },
   "coverage": {
     "first": "2011-10-11",
-    "last": "2026-07-22",
-    "decisions": 59,
+    "last": "2026-08-19",
+    "decisions": 60,
     "bySource": {
       "compiled": 49,
-      "bi.go.id": 10
+      "bi.go.id": 11
     },
     "maxGapDays": 551
   },
   "current": 0.0575,
-  "effective": "2026-07-22",
+  "effective": "2026-08-19",
   "history": [
+    {
+      "effective": "2026-08-19",
+      "rate": 0.0575,
+      "instrument": "BI7DRR",
+      "source": "bi.go.id"
+    },
     {
       "effective": "2026-07-22",
       "rate": 0.0575,
