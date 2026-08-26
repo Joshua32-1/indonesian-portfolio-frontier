@@ -59,7 +59,7 @@ node scripts/sync-risk-free-rate.mjs      # push the cached BI-Rate into portfol
 
 **`workbench/`** (the deployed unified site — needs no snapshot; data comes from `/api`):
 ```bash
-npm install && npm install --prefix workbench   # root deps are for /api only
+npm install && npm install --prefix workbench   # root holds /api deps + React/recharts (shared)
 npm run dev --prefix workbench                  # Vite on :5176, /api served by dev middleware
 npm run build --prefix workbench                # vite build → workbench/dist
 ```

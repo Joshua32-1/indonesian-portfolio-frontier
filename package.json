@@ -3,8 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Serverless functions for the unified IDX Portfolio Workbench (api/). Deliberately has NO workspaces field — the three app directories keep their own independent node_modules.",
+  "description": "Repo-root package for the Vercel deployment: the serverless functions in api/ AND the runtime deps shared by every directory workbench/ bundles source from. React/recharts live here, not in workbench/, so a file in portfolio-app/src or backtest-portfolio/src resolves them by walking up. No workspaces field.",
   "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7",
     "yahoo-finance2": "^3.0.0"
   }
 }

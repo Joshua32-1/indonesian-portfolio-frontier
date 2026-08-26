@@ -62,6 +62,17 @@ function devApiPlugin() {
 
 export default defineConfig({
   plugins: [react(), devApiPlugin()],
+  resolve: {
+    // This app bundles source from portfolio-app/ and backtest-portfolio/, which have no
+    // node_modules of their own on a clean checkout — their bare imports (react, recharts)
+    // resolve by walking UP to the repo root, where those deps are declared.
+    //
+    // dedupe pins them to exactly one copy. Without it, a machine that happens to have
+    // portfolio-app/node_modules installed (as a dev box will) resolves React twice — once
+    // from the root for workbench files, once from portfolio-app for its own — and two
+    // Reacts in one bundle means "Invalid hook call" the moment a hook runs.
+    dedupe: ['react', 'react-dom', 'recharts'],
+  },
   server: {
     port: 5176, // 5173 optimizer, 5174 backtest, 5175 dashboard
     open: true,
