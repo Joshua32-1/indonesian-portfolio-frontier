@@ -2,6 +2,20 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "workbench",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "workbench"],
+      "port": 5176,
+      "autoPort": false
+    },
+    {
+      "name": "optimizer",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "portfolio-app"],
+      "port": 5173,
+      "autoPort": false
+    },
+    {
       "name": "backtest",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "backtest-portfolio"],

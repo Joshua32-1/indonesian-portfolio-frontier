@@ -79,7 +79,18 @@ function curveRows(result, feeMode) {
   });
 }
 
-export default function App() {
+/**
+ * @param {object}  [props]
+ * @param {object}  [props.history] Pre-loaded history in `backtest-history.json` shape,
+ *   supplied by the workbench shell. Absent → the app fetches the static file itself,
+ *   so it still runs standalone.
+ * @param {string}  [props.dataVersion] Identity of that payload. Sent with every job so
+ *   the worker re-inits only when the universe actually changed.
+ * @param {boolean} [props.isDefaultUniverse=true] False when the user has edited the
+ *   universe — the frozen reference artifacts describe the canonical list only, and
+ *   the panel says so rather than implying they match.
+ */
+export default function App({ history = null, dataVersion = null, isDefaultUniverse = true } = {}) {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
 
@@ -123,10 +134,13 @@ export default function App() {
   const gridGenRef = useRef(0);         // token for the latest grid generation
   const pendingMapRef = useRef(new Map()); // id → { kind:'main'|'grid', key, cellKey?, gen? }
   const cacheRef = useRef(new Map());   // signature → result
+  const sentVersionRef = useRef(null);  // dataVersion already handed to the CURRENT worker
 
   // Spin up the worker once.
   useEffect(() => {
     const worker = new Worker(new URL('./backtestWorker.js', import.meta.url), { type: 'module' });
+    // A fresh worker holds no history, whatever we sent the previous one.
+    sentVersionRef.current = null;
     worker.onmessage = (e) => {
       const msg = e.data || {};
       const p = pendingMapRef.current.get(msg.id);
@@ -157,34 +171,59 @@ export default function App() {
     return () => worker.terminate();
   }, []);
 
+  // Hand the worker an injected history payload once per universe. Structured-cloning
+  // ~3 MB is cheap once, but not per job — so the worker caches it under `dataVersion`
+  // and every job just references that string.
+  const primeWorker = useCallback(() => {
+    if (!history || !dataVersion || sentVersionRef.current === dataVersion) return;
+    workerRef.current?.postMessage({ type: 'init', history, dataVersion });
+    sentVersionRef.current = dataVersion;
+  }, [history, dataVersion]);
+
   // Run (or replay from cache) a MAIN backtest for an explicit configuration object.
   const runWith = useCallback((cfg) => {
     if (cfg.included.length < 2) return;
     const key = sig(cfg);
     const cached = cacheRef.current.get(key);
     if (cached) { setResult(cached); setShownKey(key); setRunError(null); return; }
+    primeWorker();
     const id = ++jobRef.current;
     mainJobRef.current = id;
     pendingMapRef.current.set(id, { kind: 'main', key });
     setRunError(null);
     setRunning(true);
     setProgress({ done: 0, total: 4, label: 'Starting…' });
-    workerRef.current.postMessage({ id, ...cfg });
-  }, []);
+    workerRef.current.postMessage({ id, dataVersion, ...cfg });
+  }, [primeWorker, dataVersion]);
 
   // Load the ticker universe; default to the Long-history preset and auto-run once.
+  // `history` (workbench) wins over the static file (standalone). Re-runs whenever the
+  // workbench hands over a new universe.
+  const adopt = useCallback((d) => {
+    setData(d);
+    const preset = d.tickers.filter(t => t.listing <= LONG_HISTORY_CUTOFF).map(t => t.ticker);
+    const inc = preset.length >= 2 ? preset : d.tickers.map(t => t.ticker);
+    setIncluded(new Set(inc));
+    runWith({ included: inc, frequency: 'quarterly', lambda: 0.25, kappa: 0, maxPositionCap: 1, priorMode: 'cap', sectorCap: 1 });
+  }, [runWith]);
+
   useEffect(() => {
+    if (history) {
+      // Results keyed by the old universe's signature must not be reused.
+      cacheRef.current.clear();
+      setGridResults(null);
+      setResult(null);
+      setShownKey(null);
+      adopt(history);
+      return;
+    }
+    let cancelled = false;
     fetch('/backtest-history.json')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status} — run \`npm run fetch\` first`); return r.json(); })
-      .then(d => {
-        setData(d);
-        const preset = d.tickers.filter(t => t.listing <= LONG_HISTORY_CUTOFF).map(t => t.ticker);
-        const inc = preset.length >= 2 ? preset : d.tickers.map(t => t.ticker);
-        setIncluded(new Set(inc));
-        runWith({ included: inc, frequency: 'quarterly', lambda: 0.25, kappa: 0, maxPositionCap: 1, priorMode: 'cap', sectorCap: 1 });
-      })
-      .catch(e => setLoadError(e.message));
-  }, [runWith]);
+      .then(d => { if (!cancelled) adopt(d); })
+      .catch(e => { if (!cancelled) setLoadError(e.message); });
+    return () => { cancelled = true; };
+  }, [history, adopt]);
 
   // Lazy-load the selected prior's frozen reference artifact (cap eagerly on mount). A missing
   // file (shrunk/equal not yet generated) resolves to null → StrategyBacktest shows its own notice.
@@ -275,6 +314,7 @@ export default function App() {
   const generateGrid = () => {
     const inc = [...included];
     if (inc.length < 2) return;
+    primeWorker();
     const gen = ++gridGenRef.current;
     const initial = new Map();
     let done = 0, total = 0;
@@ -293,7 +333,7 @@ export default function App() {
           initial.set(cellKey, 'computing');
           const id = ++jobRef.current;
           pendingMapRef.current.set(id, { kind: 'grid', key, cellKey, gen });
-          workerRef.current.postMessage({ id, ...cfg });
+          workerRef.current.postMessage({ id, dataVersion, ...cfg });
         }
       }
     }
@@ -301,6 +341,10 @@ export default function App() {
     setGridResults(initial);
     setGridProgress({ done, total });
   };
+
+  const refCurrent = refCacheRef.current[refPrior]; // undefined | 'loading' | null | parsed JSON
+  const refLoading = refCurrent === undefined || refCurrent === 'loading';
+  const refProv = refCurrent && refCurrent.ok ? { gen: refCurrent.generated, ...refCurrent.params, ...refCurrent.window } : null;
 
   // Is the reference artifact still about the names you are looking at?
   //
@@ -354,10 +398,6 @@ export default function App() {
 
   const attr = ok ? result.attribution?.[attrStrategy] : null;
   const order = attr ? [...attr.rows].sort((a, b) => b.avgWeight - a.avgWeight).map(r => r.ticker) : [];
-
-  const refCurrent = refCacheRef.current[refPrior]; // undefined | 'loading' | null | parsed JSON
-  const refLoading = refCurrent === undefined || refCurrent === 'loading';
-  const refProv = refCurrent && refCurrent.ok ? { gen: refCurrent.generated, ...refCurrent.params, ...refCurrent.window } : null;
 
   return (
     <Shell>
@@ -619,6 +659,17 @@ export default function App() {
           identical at the same seed. Written to <code style={refCode}>public/{REF_FILE[refPrior].replace('/', '')}</code>,
           which is <b>gitignored and local</b> — nothing regenerates it behind your back.
         </div>
+        {!isDefaultUniverse && (
+          <div style={{
+            marginTop: 10, padding: '8px 10px', borderRadius: 6,
+            background: 'rgba(245,158,11,0.08)', border: '1px solid #F59E0B44',
+            fontSize: 10, color: '#F59E0B', lineHeight: 1.6,
+          }}>
+            <b>Your universe is edited.</b> This reference run was computed over the canonical
+            universe in <code style={refCode}>universe.js</code>, not your list — the curves below
+            do <b>not</b> describe the tickers you selected. The live explorer above does.
+          </div>
+        )}
         {refProv && (
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'baseline', marginTop: 10 }}>
             <Stat label="GENERATED" value={(refProv.gen || '').slice(0, 10) || '—'} />

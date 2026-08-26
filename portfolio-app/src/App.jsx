@@ -79,6 +79,10 @@ const MAX_TAU = 0.15;
 // Tab identifiers
 const TABS = ['WORKSPACE', 'CORRELATION', 'SIMULATION', 'ANALYTICS'];
 
+/** Height of the workbench shell's nav — the offset our tab bar sticks below when
+ *  embedded (chrome={false}). Keep in sync with workbench/src/Shell.jsx. */
+const EMBED_NAV_HEIGHT = 46;
+
 // Style objects MUST be declared before components that reference them (HMR-safe).
 const styles = {
   root:       { minHeight: '100vh', background: '#030A14', fontFamily: "'JetBrains Mono','Fira Code','Cascadia Code',monospace", color: '#E2E8F0' },
@@ -143,7 +147,15 @@ function computeBankKey({ activeTickers, corrStart, corrEnd, volHalfLife,
 //  Root Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function App() {
+/**
+ * @param {object}  [props]
+ * @param {object}  [props.snapshot] Pre-loaded snapshot in `live-market-snapshot.json`
+ *   shape. Supplied by the workbench shell, which fetches the universe live from /api.
+ *   When absent the app fetches the static file itself, so it still runs standalone.
+ * @param {boolean} [props.chrome=true] Render the app's own title bar. The workbench
+ *   supplies its own nav, so it turns this off to avoid two stacked headers.
+ */
+export default function App({ snapshot = null, chrome = true } = {}) {
   // ── Data state ───────────────────────────────────────────────────────────
   const [assets,       setAssets]       = useState([]);
   const [benchmark,    setBenchmark]    = useState(null);
@@ -187,36 +199,60 @@ export default function App() {
 
   const simResult = lastRun?.simResult ?? null;
 
-  // ── 1.  Load snapshot on mount ────────────────────────────────────────────
+  // ── 1.  Load snapshot ─────────────────────────────────────────────────────
+  // Populates every piece of snapshot-derived state. Called either with the
+  // `snapshot` prop (workbench, live universe) or with the statically fetched file
+  // (standalone). Re-runnable: the workbench calls it again whenever the user edits
+  // the universe and re-runs.
+  const hydrate = useCallback((snap) => {
+    const { assets: raw, riskFreeRate: rf, benchmark: bench, historyRange: hr } = snap;
+    const range = hr
+      ? { min: hr.min ?? hr.start, max: hr.max ?? hr.end, interval: hr.interval }
+      : availableHistoryRange(raw, bench?.priceHistory);
+    setAssets(raw);
+    setBenchmark(bench ?? null);
+    setHistoryRange(range);
+    setRiskFreeRate(rf ?? DEFAULT_RF);
+    setRfEffective(snap.riskFreeRateEffective ?? null);
+    const sectors = [...new Set(raw.map(a => a.sector))];
+    setSectorCaps(buildSectorCapsForSectors(sectors));
+    const tickers = raw.map(a => a.ticker);
+    const initialActive = new Set(tickers);
+    setActiveSet(initialActive);
+    // Per-asset overrides are keyed by ticker — drop entries for names the new
+    // universe no longer contains, or they leak into later caps/turnover maths.
+    const live = new Set(tickers);
+    const prune = (obj) => Object.fromEntries(Object.entries(obj).filter(([t]) => live.has(t)));
+    setAssetMaxWeights(prev => prune(prev));
+    setCurrentWeights(prev => prune(prev));
+    const aligned = alignedHistoryRange(raw);
+    const bounds = aligned ?? range;
+    if (bounds?.min) {
+      setCorrStart(bounds.min);
+      setCorrEnd(todayISO());
+    }
+    setLastCorrActiveKey(tickers.slice().sort().join(','));
+    setSnapshotGenerated(snap.generated ?? '');
+    setLoadStatus('ready');
+  }, []);
+
   useEffect(() => {
+    if (snapshot) {
+      // A prior run's results describe the previous universe — clear them so
+      // Analytics can't show weights for tickers that are no longer loaded.
+      setLastRun(null);
+      scenarioBankRef.current = null;
+      setBankInfo(null);
+      hydrate(snapshot);
+      return;
+    }
+    let cancelled = false;
     fetch('/live-market-snapshot.json')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(snap => {
-        const { assets: raw, riskFreeRate: rf, benchmark: bench, historyRange: hr } = snap;
-        const range = hr
-          ? { min: hr.min ?? hr.start, max: hr.max ?? hr.end, interval: hr.interval }
-          : availableHistoryRange(raw, bench?.priceHistory);
-        setAssets(raw);
-        setBenchmark(bench ?? null);
-        setHistoryRange(range);
-        setRiskFreeRate(rf ?? DEFAULT_RF);
-        setRfEffective(snap.riskFreeRateEffective ?? null);
-        const sectors = [...new Set(raw.map(a => a.sector))];
-        setSectorCaps(buildSectorCapsForSectors(sectors));
-        const initialActive = new Set(raw.map(a => a.ticker));
-        setActiveSet(initialActive);
-        const aligned = alignedHistoryRange(raw);
-        const bounds = aligned ?? range;
-        if (bounds?.min) {
-          setCorrStart(bounds.min);
-          setCorrEnd(todayISO());
-        }
-        setLastCorrActiveKey(raw.map(a => a.ticker).sort().join(','));
-        setSnapshotGenerated(snap.generated ?? '');
-        setLoadStatus('ready');
-      })
-      .catch(err => { setLoadError(err.message); setLoadStatus('error'); });
-  }, []);
+      .then(snap => { if (!cancelled) hydrate(snap); })
+      .catch(err => { if (!cancelled) { setLoadError(err.message); setLoadStatus('error'); } });
+    return () => { cancelled = true; };
+  }, [snapshot, hydrate]);
 
   // ── 1b. Overlay the cron-refreshed BI-Rate ────────────────────────────────
   // live-market-snapshot.json is only as fresh as the last fetch-snapshot run, but
@@ -447,30 +483,33 @@ export default function App() {
       `}</style>
 
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <header style={styles.header}>
-        <div style={styles.headerLeft}>
-          <span style={{ fontSize: 22, color: '#00CFFD', lineHeight: 1 }}>◈</span>
-          <div>
-            <div style={styles.appName}>IDX PORTFOLIO OPTIMIZER</div>
-            <div style={styles.appSub}>Markowitz MPT · Monte Carlo · Custom Correlation</div>
+      {chrome && (
+        <header style={styles.header}>
+          <div style={styles.headerLeft}>
+            <span style={{ fontSize: 22, color: '#00CFFD', lineHeight: 1 }}>◈</span>
+            <div>
+              <div style={styles.appName}>IDX PORTFOLIO OPTIMIZER</div>
+              <div style={styles.appSub}>Markowitz MPT · Monte Carlo · Custom Correlation</div>
+            </div>
           </div>
-        </div>
-        <div style={styles.headerRight}>
-          {lastRun?.meta && (
-            <span style={styles.lastRun}>
-              {lastRun.meta.ts}
-              {`  ·  ρ ${lastRun.meta.corrStart}→${lastRun.meta.corrEnd}`}
-              {'  ·  '}{lastRun.meta.activeCount} assets
+          <div style={styles.headerRight}>
+            {lastRun?.meta && (
+              <span style={styles.lastRun}>
+                {lastRun.meta.ts}
+                {`  ·  ρ ${lastRun.meta.corrStart}→${lastRun.meta.corrEnd}`}
+                {'  ·  '}{lastRun.meta.activeCount} assets
+              </span>
+            )}
+            <span style={styles.rfBadge}>
+              RF {(riskFreeRate * 100).toFixed(2)}% · BI RATE{rfEffective ? ` · EFF ${rfEffective}` : ''}
             </span>
-          )}
-          <span style={styles.rfBadge}>
-            RF {(riskFreeRate * 100).toFixed(2)}% · BI RATE{rfEffective ? ` · EFF ${rfEffective}` : ''}
-          </span>
-        </div>
-      </header>
+          </div>
+        </header>
+      )}
 
       {/* ── Tab bar ──────────────────────────────────────────────────────── */}
-      <div style={styles.tabBar}>
+      {/* Without our own header the bar sticks directly under the host nav. */}
+      <div style={chrome ? styles.tabBar : { ...styles.tabBar, top: EMBED_NAV_HEIGHT }}>
         {TABS.map((name, idx) => (
           <button
             key={name}
@@ -501,6 +540,22 @@ export default function App() {
         >
           {isRunning ? '⟳ RUNNING…' : `▶ REGENERATE  (${mcIterations.toLocaleString()} PATHS)`}
         </button>
+        {/* Embedded: the run meta and r_f have no header to live in, so they ride
+            along after the action button. */}
+        {!chrome && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginLeft: 12 }}>
+            {lastRun?.meta && (
+              <span style={styles.lastRun}>
+                {lastRun.meta.ts}
+                {`  ·  ρ ${lastRun.meta.corrStart}→${lastRun.meta.corrEnd}`}
+                {'  ·  '}{lastRun.meta.activeCount} assets
+              </span>
+            )}
+            <span style={styles.rfBadge}>
+              RF {(riskFreeRate * 100).toFixed(2)}% · BI RATE{rfEffective ? ` · EFF ${rfEffective}` : ''}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* ── Tab content ──────────────────────────────────────────────────── */}

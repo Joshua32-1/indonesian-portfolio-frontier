@@ -5,6 +5,7 @@
 | [`portfolio-app/`](portfolio-app/) | IDX portfolio optimizer (Monte Carlo, efficient frontier). Run locally. |
 | [`backtest-portfolio/`](backtest-portfolio/) | Look-ahead-free, cost-aware walk-forward backtester of the optimizer machinery (net of IDX transaction costs, gross alongside) — tail-aware Max-Sharpe + tail-λ variants vs min-variance / equal-weight / IHSG across weekly/monthly/quarterly with a turnover-penalty (κ) sweep. Run locally; history artifacts are regenerated (gitignored), while the 3 canonical `backtest-results*.json` are committed (the main one refreshed weekly by CI). |
 | [`live-dashboard-portfolio/`](live-dashboard-portfolio/) | Minimal live tracker (IHSG vs model portfolios). Deploy to **Vercel** with Root Directory = `live-dashboard-portfolio`. |
+| [`workbench/`](workbench/) + [`api/`](api/) | **IDX Portfolio Workbench** — the optimizer and the backtester on one deployed site, over an **editable ticker universe** fed live from Yahoo by the `/api` serverless functions. Deploy to **Vercel** with Root Directory = **repository root**. |
 
 ## Quick start
 
@@ -22,6 +23,14 @@ cd backtest-portfolio && npm install && npm run fetch && npm run backtest && npm
 ```bash
 cd live-dashboard-portfolio && npm install && npm run dev
 ```
+
+**Workbench — both tools, one page, editable universe (local, :5176):**
+```bash
+npm install && npm install --prefix workbench && npm run dev --prefix workbench
+```
+Needs no snapshot: it fetches the universe live through `/api`, which Vite serves in dev
+from the same handlers Vercel runs in production. Editing the ticker list in the UNIVERSE
+tab is **browser-local** — it never touches `universe.js` or the weekly rebalance.
 
 **Refresh optimizer data:** `cd portfolio-app && npm run fetch-snapshot` (rebuilds the rich snapshot from Yahoo Finance + BI-Rate).
 

@@ -13,6 +13,7 @@ cd portfolio-app && npm install && npm run dev      # predev fetches a fresh sna
 
 # Backtester (local, cost-aware walk-forward)
 cd backtest-portfolio && npm install && npm run fetch && npm run backtest && npm run dev   # serves on :5174
+npm install && npm install --prefix workbench && npm run dev --prefix workbench           # unified workbench on :5176 (no snapshot needed)
 
 # Dashboard
 cd live-dashboard-portfolio && npm install && npm run dev
