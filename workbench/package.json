@@ -1,0 +1,21 @@
+{
+  "name": "idx-portfolio-workbench",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Unified deployable site: the optimizer and the backtester over one editable ticker universe, fed live by the root /api functions.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.2"
+  }
+}

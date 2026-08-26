@@ -1,0 +1,10 @@
+{
+  "name": "idx-portfolio-workbench-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Serverless functions for the unified IDX Portfolio Workbench (api/). Deliberately has NO workspaces field — the three app directories keep their own independent node_modules.",
+  "dependencies": {
+    "yahoo-finance2": "^3.0.0"
+  }
+}
