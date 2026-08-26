@@ -4,9 +4,18 @@ The optimizer and the backtester on **one deployed site**, over an **editable ti
 universe** fetched live from Yahoo Finance.
 
 ```bash
-npm install && npm install --prefix workbench   # root deps are for /api only
+npm install && npm install --prefix workbench
 npm run dev --prefix workbench                  # :5176
 ```
+
+**Where the dependencies live.** `react`, `react-dom` and `recharts` are declared in the
+**repo-root** `package.json`, not here. This app bundles source from `portfolio-app/` and
+`backtest-portfolio/`, which have no `node_modules` on a clean checkout — their bare
+imports resolve by walking up to the root. Declaring the same packages in
+`workbench/package.json` would give workbench files a second copy that sibling files don't
+see: two Reacts in one bundle, i.e. `Invalid hook call` at runtime. `resolve.dedupe` in
+`vite.config.js` pins them to one copy even on a dev box that has all four `node_modules`
+installed.
 
 No snapshot needed — the app fetches whatever universe you give it through `/api`, which
 the Vite dev server mounts from the same handler files Vercel runs in production.

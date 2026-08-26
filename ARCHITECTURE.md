@@ -71,7 +71,7 @@ my-portfolio-app/
 │   └── vite.config.js               # fs.allow ['..'] + dev middleware mounting ../api/*.mjs
 │
 ├── vercel.json                     # builds workbench/, serves /api (Vercel Root Directory = repo root)
-└── package.json                    # deps for /api only — NO workspaces field
+└── package.json                    # /api deps + React/recharts shared by every bundled dir — NO workspaces field
 ```
 
 ## Responsibilities
