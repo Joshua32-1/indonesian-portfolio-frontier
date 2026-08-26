@@ -66,10 +66,14 @@ than two hours old. The nav shows the newest bar date, so whatever you get is da
 on screen.
 
 **On "why is this not today's price?"** Yahoo publishes only *settled* bars, so the newest
-daily close is normally the **previous** IDX session. Separately, the backtest's default
-**quarterly** rebalance grid ends at its last 13-week step — currently ~10 weeks behind the
-newest bar. That is the grid, not stale data: switch Rebalance to **Weekly** and the curve
-runs to the latest weekly bar.
+daily close is normally the **previous** IDX session.
+
+The backtest window tracks the data automatically: the rebalance grid is anchored at the
+**newest bar** and steps backwards, so every frequency ends on the most recent week all
+included names have a price for. (It used to anchor at the first bar and step forward,
+which silently dropped up to 12 weeks off the end at quarterly.) The cost is that the grid
+shifts by a bar each week, so two runs a week apart are not directly comparable — see
+`rebalanceGrid()` in `backtest-portfolio/src/backtestEngine.js`.
 
 `/api/rf` **reads `portfolio-app/data/bi-rate.json`; it does not scrape BI.** That archive
 is the single file every app resolves r_f from, and `refresh-bi-rate.js` is the only thing

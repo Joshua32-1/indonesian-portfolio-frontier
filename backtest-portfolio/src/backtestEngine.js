@@ -629,6 +629,39 @@ function rfWindowStats(rfAt, rf, startISO, endISO) {
   };
 }
 
+/**
+ * Rebalance grid for a frequency, ANCHORED AT THE NEWEST BAR.
+ *
+ * The grid used to be `rows.filter((_, i) => i % step === 0)` — anchored at index 0 and
+ * stepping forward. That silently discarded every bar after the last grid point: up to
+ * `step - 1` weeks (12 for quarterly), and the amount cycled 0→12 as new bars arrived, so
+ * the reported window could sit almost three months behind data the app had already loaded.
+ *
+ * Anchoring at the end instead makes the last rebalance the most recent bar, always. Steps
+ * remain exactly `step` weeks apart, so per-period annualisation is unchanged; what shifts
+ * is the *start*, which now begins up to `step - 1` bars into the available history rather
+ * than at bar 0. That ragged prefix is dropped rather than kept as a short first interval,
+ * which would distort the first period's return.
+ *
+ * No look-ahead is introduced: each step's context is still built only from data at or
+ * before its own date (see buildStepContexts).
+ *
+ * The trade-off, stated plainly: the whole grid now shifts by one bar each time a new bar
+ * lands, so re-running next week moves every rebalance date and the numbers move with it.
+ * Previously they were frozen for `step` weeks and then jumped. For a research tool that
+ * is the better default — a window that silently trails the data by up to three months is
+ * the more misleading failure — but two runs a week apart are not directly comparable.
+ *
+ * "Newest bar" means the newest week EVERY included name has a price for (the aligned
+ * intersection), not the newest bar any one ticker has; you cannot rebalance into a week
+ * where a holding is unpriced.
+ */
+function rebalanceGrid(rows, step) {
+  if (step <= 1) return rows;
+  const offset = (rows.length - 1) % step; // drop the ragged prefix, keep the newest bar
+  return rows.filter((_, i) => i >= offset && (i - offset) % step === 0);
+}
+
 /** Build per-step context (Σ, μ_eq, realized returns, ADV) once for a rebalance grid. */
 function buildStepContexts(grid, ctx) {
   const { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife,
@@ -961,7 +994,7 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
   for (const freqKey of frequencies) {
     const freq = FREQUENCIES[freqKey];
     if (!freq) continue;
-    const grid = rebalanceRows.filter((_, i) => i % freq.step === 0);
+    const grid = rebalanceGrid(rebalanceRows, freq.step);
     if (grid.length < 6) { warnings.push(`${freqKey}: too few rebalances (${grid.length}).`); continue; }
     const ppy = freq.periodsPerYear;
 
@@ -1090,7 +1123,7 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
   if (!prep.ok) return { ok: false, warnings: prep.warnings };
   const { rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, sharedCtx } = prep;
 
-  const grid = rebalanceRows.filter((_, i) => i % freq.step === 0);
+  const grid = rebalanceGrid(rebalanceRows, freq.step);
   if (grid.length < 6) return { ok: false, warnings: [`${freq.label}: too few rebalances (${grid.length}).`] };
   const ppy = freq.periodsPerYear;
 
