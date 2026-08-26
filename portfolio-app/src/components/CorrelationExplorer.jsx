@@ -37,16 +37,37 @@ function cellColor(r) {
   return `rgba(239, 68, 68, ${0.1 + abs * 0.4})`;
 }
 
+/** Rows per column before the tooltip flows into another column. One row per series in a
+ *  single column grows taller than the plot at ~20 names and hides the very lines you are
+ *  hovering to read. */
+const TOOLTIP_ROWS_PER_COL = 9;
+
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
+  // Sort by value so the list order matches how the lines are stacked at this x — with 25+
+  // series, series-declaration order is unscannable.
+  const rows = [...payload].sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
+  const rowsPerCol = Math.min(rows.length, TOOLTIP_ROWS_PER_COL);
   return (
     <div style={s.tooltip}>
       <div style={{ color: '#64748B', marginBottom: 4 }}>{label}</div>
-      {payload.map(p => (
-        <div key={p.dataKey} style={{ color: p.color, fontSize: 9 }}>
-          {p.dataKey}: {p.value?.toFixed(1)}
-        </div>
-      ))}
+      {/* Column-major flow: reading down a column keeps the value ordering intact. */}
+      <div style={{
+        display: 'grid',
+        gridAutoFlow: 'column',
+        gridTemplateRows: `repeat(${rowsPerCol}, auto)`,
+        columnGap: 14,
+        rowGap: 1,
+      }}>
+        {rows.map(p => (
+          <div key={p.dataKey} style={{ color: p.color, fontSize: 9, display: 'flex', gap: 10 }}>
+            <span style={{ minWidth: 34 }}>{p.dataKey}</span>
+            <span style={{ marginLeft: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+              {p.value?.toFixed(1)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
