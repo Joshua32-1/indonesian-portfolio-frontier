@@ -20,7 +20,7 @@ import YahooFinance from 'yahoo-finance2'; // v3 — capitalised class import
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { UNIVERSE_JK } from '../../portfolio-app/data/universe.js';
+import { UNIVERSE_JK, tierAtMost, toJK } from '../../portfolio-app/data/universe.js';
 import { BI_RATE_FALLBACK, BI_RATE_MIN, BI_RATE_MAX } from '../../portfolio-app/data/bi-rate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,8 +30,29 @@ const yahooFinance = new YahooFinance({
 
 const JAKARTA_TZ = 'Asia/Jakarta';
 
-/** Same universe as the optimizer — single source of truth in portfolio-app/data/universe.js. */
-const TICKERS = UNIVERSE_JK;
+/**
+ * Same universe as the optimizer — single source of truth in portfolio-app/data/universe.js.
+ *
+ * Two overrides, mirroring the backtest/sweep scripts' env conventions:
+ *   UNIVERSE=BBCA,BBRI,…   an explicit list
+ *   TIER=core|lq45|broad   the universe tiers the analyst archive spans (25 / 50 / 86)
+ * Pair either with `--out <path>` to write a SEPARATE history file, so a wide research
+ * fetch does not clobber the 25-name default that `npm run dev` keeps current.
+ */
+const TICKERS = (() => {
+  if (process.env.UNIVERSE) {
+    return process.env.UNIVERSE.split(',').map(s => s.trim()).filter(Boolean).map(toJK);
+  }
+  if (process.env.TIER) return tierAtMost(process.env.TIER);
+  return UNIVERSE_JK;
+})();
+
+/** `--out <path>` → write there instead of public/backtest-history.json. */
+const OUT_PATH = (() => {
+  const i = process.argv.indexOf('--out');
+  const rel = i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : null;
+  return rel ? (rel.startsWith('/') ? rel : join(__dirname, '..', rel)) : null;
+})();
 
 const BENCHMARK_TICKER = '^JKSE';
 
@@ -172,7 +193,11 @@ async function fetchSharesOut(ticker) {
 }
 
 async function main() {
-  console.log('🚀  Backtest history fetch — Yahoo Finance v3\n');
+  console.log('🚀  Backtest history fetch — Yahoo Finance v3');
+  console.log(`    ${TICKERS.length} ticker(s)`
+    + (process.env.TIER ? ` · TIER=${process.env.TIER}` : '')
+    + (process.env.UNIVERSE ? ' · explicit UNIVERSE' : '')
+    + (OUT_PATH ? ` → ${OUT_PATH}` : '') + '\n');
 
   const now = new Date();
   const weeklyEnd = lastCompletedFridayISO(now);
@@ -183,7 +208,7 @@ async function main() {
   // covers the last completed session there are no new bars to get, so skip it. Checking the
   // bar we WOULD fetch beats a wall-clock TTL — it is exact, and it never re-fetches on a
   // weekend or a holiday when nothing new exists.
-  const outPathEarly = join(__dirname, '..', 'public', 'backtest-history.json');
+  const outPathEarly = OUT_PATH ?? join(__dirname, '..', 'public', 'backtest-history.json');
   if (process.argv.includes('--if-stale')) {
     try {
       const prior = JSON.parse(readFileSync(outPathEarly, 'utf8'));
@@ -252,7 +277,7 @@ async function main() {
 
   const outDir = join(__dirname, '..', 'public');
   mkdirSync(outDir, { recursive: true });
-  const outPath = join(outDir, 'backtest-history.json');
+  const outPath = OUT_PATH ?? join(outDir, 'backtest-history.json');
   writeFileSync(outPath, JSON.stringify(payload));
   console.log(`\n📦  Written → ${outPath}`);
   console.log(`    ${tickers.length} tickers + IHSG\n`);

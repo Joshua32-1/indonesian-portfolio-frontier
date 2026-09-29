@@ -38,24 +38,79 @@ const STRAT_META = {
 const ATTR_STRATS = ['MaxSharpe', 'Tail', 'MinVar', 'EqualWeight'];
 
 const POS_CAPS = [{ value: 1, label: 'Off' }, { value: 0.2, label: '20%' }, { value: 0.15, label: '15%' }, { value: 0.1, label: '10%' }];
-const PRIORS = [{ value: 'cap', label: 'Market-cap' }, { value: 'shrunk', label: 'Shrunk 50/50' }, { value: 'equal', label: 'Equal-weight' }];
+// ANCHOR for the return-seeking strategies: the reference weights a Black-Litterman prior is
+// reverse-optimized from (π = r_f + δΣw). 'none' drops the prior entirely.
+//
+// This axis does NOT by itself decide where μ comes from — the Views axis does. It was labelled
+// 'None (sample μ)' back when there was no Views control and prior=none therefore implied the
+// trailing sample mean; with Views exposed that label asserts something untrue (prior=none +
+// Views=Analyst is analyst-driven, not sample-driven). See DEGENERATE_VIEW below.
+const PRIORS = [
+  { value: 'cap', label: 'Market-cap' },
+  { value: 'shrunk', label: 'Shrunk 50/50' },
+  { value: 'equal', label: 'Equal-weight' },
+  { value: 'none', label: 'None' },
+];
+
+// μ SIGNAL axis. This is the axis the offline config sweeps found to matter most, and until
+// now it was reachable only from the CLI (VIEWS= in run-strategy-backtest.mjs).
+//   analyst  point-in-time consensus targets where the archive covers a name, prior elsewhere
+//   hybrid   …targets where covered, trailing 1-year sample mean everywhere else
+//   sample   sample mean as the view everywhere (needs no archive)
+const VIEW_MODES = [
+  { value: 'off', label: 'None' },
+  { value: 'analyst', label: 'Analyst' },
+  { value: 'hybrid', label: 'Analyst + sample' },
+  { value: 'sample', label: 'Sample \u03bc' },
+];
+// τ scales how far the posterior travels from the prior toward the views. It is a NO-OP
+// without both a prior and views, so the control is disabled in those combinations rather
+// than silently producing identical runs under different labels.
+const TAUS = [0.01, 0.03, 0.1];
 
 // Comparison grid: κ (rows) × prior (cols), at reduced fidelity for a faster sweep.
 const GRID_KAPPAS = [0, 0.1, 0.25, 0.5];
 const GRID_PATHS = 40;
 const GRID_ITER = 12;
-const PRIOR_LABEL = { cap: 'Market-cap', shrunk: 'Shrunk', equal: 'Equal' };
+const PRIOR_LABEL = { cap: 'Market-cap', shrunk: 'Shrunk', equal: 'Equal', none: 'No prior' };
+// μ SIGNAL axis (VIEWS= in run-strategy-backtest.mjs). 'off' is the historical default and the
+// one worth flagging: with no signal, Max-Sharpe collapses to the prior weights by construction.
+const VIEW_LABEL = { off: 'None', analyst: 'Analyst', hybrid: 'Analyst + sample', sample: 'Sample \u03bc' };
 
 // "Reference backtest" precompute artifacts (npm run backtest / the Regenerate button), one
 // file per prior. The cap run keeps the canonical filename; shrunk/equal get a -<prior> suffix.
 // LOCAL AND GITIGNORED — not committed, and not built by CI. A fresh clone has none until you
 // generate one, which is the point: it always reflects a universe you chose.
-const REF_FILE = { cap: '/backtest-results.json', shrunk: '/backtest-results-shrunk.json', equal: '/backtest-results-equal.json' };
+const REF_FILE = { cap: '/backtest-results.json', shrunk: '/backtest-results-shrunk.json', equal: '/backtest-results-equal.json', none: '/backtest-results-none.json' };
 
 // Cache key includes the fidelity (paths / iters) so reduced-fidelity grid cells never collide
 // with full-fidelity main-screen runs sharing the same universe/freq/λ/κ/caps/prior.
-const sig = (c) =>
-  `${[...c.included].sort().join(',')}|${c.frequency}|${c.lambda}|${c.kappa}|${c.maxPositionCap}|${c.priorMode}|${c.sectorCap}|${c.paths ?? 'd'}|${c.optimizeMaxIter ?? 'd'}`;
+// With NO prior there is no π to blend against, so the engine sets μ = Q outright. That makes
+// two pairs of settings the SAME RUN:
+//   prior=none + views=sample   ≡  prior=none + views=off      (μ = trailing sample mean)
+//   prior=none + views=hybrid   ≡  prior=none + views=analyst   (uncovered names fall back to
+//                                                                the sample mean either way)
+// Normalising here means the cache recognises them as one backtest instead of recomputing an
+// identical result under a second label — and it is why `none/hybrid` and `none/analyst` came
+// out bit-identical in the offline sweeps.
+const canonicalView = (priorMode, viewMode) => {
+  if (priorMode !== 'none') return viewMode ?? 'off';
+  if (viewMode === 'sample') return 'off';
+  if (viewMode === 'hybrid') return 'analyst';
+  return viewMode ?? 'off';
+};
+
+// viewMode and τ are part of the key: without them a view-driven run would collide with a
+// signal-free one over the same universe and be replayed from cache as if it were the same
+// backtest. τ is folded in only where it bites, so runs that are genuinely identical still
+// share a cache entry.
+const sig = (c) => {
+  const tauPart = (c.viewMode && c.viewMode !== 'off' && c.priorMode !== 'none' && c.tau != null)
+    ? `t${c.tau}` : 't-';
+  return `${[...c.included].sort().join(',')}|${c.frequency}|${c.lambda}|${c.kappa}|${c.maxPositionCap}`
+    + `|${c.priorMode}|${canonicalView(c.priorMode, c.viewMode)}|${tauPart}|${c.sectorCap}`
+    + `|${c.paths ?? 'd'}|${c.optimizeMaxIter ?? 'd'}`;
+};
 const stratLabel = (key, lambda) => (key === 'Tail' ? `Tail λ=${lambda}` : STRAT_META[key].label);
 
 // Pivot a runLiveStrategy result into Recharts rows + series for the chosen fee mode (shared by
@@ -90,7 +145,7 @@ function curveRows(result, feeMode) {
  *   universe — the frozen reference artifacts describe the canonical list only, and
  *   the panel says so rather than implying they match.
  */
-export default function App({ history = null, dataVersion = null, isDefaultUniverse = true } = {}) {
+export default function App({ history = null, dataVersion = null, views = null, isDefaultUniverse = true } = {}) {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
 
@@ -100,6 +155,8 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
   const [kappa, setKappa] = useState(0);
   const [posCap, setPosCap] = useState(1);        // per-name cap (1 = off)
   const [priorMode, setPriorMode] = useState('cap');
+  const [viewMode, setViewMode] = useState('off');
+  const [tau, setTau] = useState(0.03);
   const [sectorCap, setSectorCap] = useState(1);  // per-sector cap (1 = off)
   const [feeMode, setFeeMode] = useState('net');
   const [attrStrategy, setAttrStrategy] = useState('MaxSharpe');
@@ -176,9 +233,9 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
   // and every job just references that string.
   const primeWorker = useCallback(() => {
     if (!history || !dataVersion || sentVersionRef.current === dataVersion) return;
-    workerRef.current?.postMessage({ type: 'init', history, dataVersion });
+    workerRef.current?.postMessage({ type: 'init', history, dataVersion, views });
     sentVersionRef.current = dataVersion;
-  }, [history, dataVersion]);
+  }, [history, dataVersion, views]);
 
   // Run (or replay from cache) a MAIN backtest for an explicit configuration object.
   const runWith = useCallback((cfg) => {
@@ -204,7 +261,8 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
     const preset = d.tickers.filter(t => t.listing <= LONG_HISTORY_CUTOFF).map(t => t.ticker);
     const inc = preset.length >= 2 ? preset : d.tickers.map(t => t.ticker);
     setIncluded(new Set(inc));
-    runWith({ included: inc, frequency: 'quarterly', lambda: 0.25, kappa: 0, maxPositionCap: 1, priorMode: 'cap', sectorCap: 1 });
+    runWith({ included: inc, frequency: 'quarterly', lambda: 0.25, kappa: 0, maxPositionCap: 1,
+      priorMode: 'cap', viewMode: 'off', tau: null, sectorCap: 1 });
   }, [runWith]);
 
   useEffect(() => {
@@ -324,7 +382,7 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
         const cellKey = `${k}|${p.value}`;
         const cfg = {
           included: inc, frequency, lambda, kappa: k, maxPositionCap: posCap, priorMode: p.value,
-          sectorCap, paths: GRID_PATHS, optimizeMaxIter: GRID_ITER,
+          viewMode, tau, sectorCap, paths: GRID_PATHS, optimizeMaxIter: GRID_ITER,
         };
         const key = sig(cfg);
         const cached = cacheRef.current.get(key);
@@ -378,10 +436,38 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
     return best;
   }, [data, included]);
 
+  // Is the trailing sample mean part of μ at all? With a prior it only stands in for names
+  // the analyst archive misses (hybrid/sample); with no prior it is the estimator itself.
+  const usesSampleMean = priorMode === 'none' || viewMode === 'hybrid' || viewMode === 'sample';
+
+  // Names the sample mean CANNOT estimate: under MIN_SAMPLE_MEAN_OBS (60) daily bars in the
+  // trailing year, sampleMeanReturns returns r_f instead — zero expected excess return, so the
+  // optimizer declines to hold them. On screen that is indistinguishable from a name it simply
+  // disliked, so name them. Rare by construction (the walk starts a year after the newest
+  // listing) but a long suspension or a very thin name can still trip it.
+  const sparseNames = useMemo(() => {
+    const winStart = result?.ok ? result.window?.start : null;
+    if (!data || !usesSampleMean || !winStart) return [];
+    const from = new Date(Date.parse(`${winStart}T00:00:00Z`) - 365 * 86400000).toISOString().slice(0, 10);
+    return data.tickers
+      .filter(t => included.has(t.ticker))
+      .filter(t => (t.daily?.dates ?? []).filter(d => d > from && d <= winStart).length < 60)
+      .map(t => t.ticker);
+  }, [data, included, usesSampleMean, result]);
+
   if (loadError) return <Shell><div style={{ color: '#F87171', padding: 24 }}>⚠️ {loadError}</div></Shell>;
   if (!data) return <Shell><div style={{ color: '#5B7A95', padding: 24 }}>Loading market history…</div></Shell>;
 
-  const currentCfg = { included: [...included], frequency, lambda, kappa, maxPositionCap: posCap, priorMode, sectorCap };
+  // τ blends prior against views, so it only means anything when both are present.
+  const tauApplies = viewMode !== 'off' && priorMode !== 'none';
+  // Surfaced rather than hidden: a user who picks a setting that changes nothing should be
+  // told, not left to infer it from two identical-looking results.
+  const degenerate = priorMode === 'none' && (viewMode === 'sample' ? 'None'
+    : viewMode === 'hybrid' ? 'Analyst' : null);
+
+
+  const currentCfg = { included: [...included], frequency, lambda, kappa, maxPositionCap: posCap,
+    priorMode, viewMode, tau, sectorCap };
   const currentKey = sig(currentCfg);
   const stale = !running && shownKey !== null && shownKey !== currentKey;
   const onRun = () => runWith(currentCfg);
@@ -389,6 +475,7 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
 
   const ok = result?.ok;
   const w = ok ? result.window : null;
+
   const strategies = ok ? result.strategies : [];
 
   // Equity-curve chart rows + series for the selected fee mode (shared helpers).
@@ -435,6 +522,11 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
                 min={0} max={0.9} step={0.05} fmt={v => (v === 0 ? 'Off' : v.toFixed(2))} />
               <Toggle label="Stock cap" value={posCap} setValue={setPosCap} options={POS_CAPS} />
               <Toggle label="Prior" value={priorMode} setValue={setPriorMode} options={PRIORS} />
+              <Toggle label="Views" value={viewMode} setValue={setViewMode} options={VIEW_MODES} />
+              <Toggle label={'\u03c4'} value={tau} setValue={setTau} disabled={!tauApplies}
+                title={tauApplies ? 'How far the posterior travels from the prior toward the views'
+                  : '\u03c4 needs BOTH a prior and views — it does nothing in this combination'}
+                options={TAUS.map(t => ({ value: t, label: String(t) }))} />
               <Slider label="Sector cap" value={sectorCap} setValue={setSectorCap}
                 min={0.15} max={1} step={0.05} fmt={v => (v >= 1 ? 'Off' : `${Math.round(v * 100)}%`)} />
               <Toggle label="Fees" value={feeMode} setValue={setFeeMode}
@@ -454,7 +546,10 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
               <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 8 }}>
                 Heavy passes (Max-Sharpe + Tail) run off the main thread — est. <b>{FREQ_HINT[frequency]}</b> for the
                 full-history universe; fewer names or a coarser frequency is faster. Min-Var, Equal-Wt &amp; IHSG are quick.
-                {priorMode !== 'cap' && <> · <span style={{ color: '#A78BFA' }}>Prior shifts Max-Sharpe &amp; Tail only (Min-Var ignores returns). Equal prior + no views ⇒ Max-Sharpe ≈ Equal-Wt (the equilibrium tangency); Shrunk sits between cap-weights and equal.</span></>}
+                {priorMode === 'none' && <> · <span style={{ color: '#F59E0B' }}><b>No prior — no Black-Litterman.</b> There is no π to blend against, so μ is the SIGNAL outright: {viewMode === 'off' || viewMode === 'sample' ? 'the trailing 1-year sample mean (plain Markowitz)' : 'the analyst view where the archive covers a name, and the trailing 1-year sample mean everywhere else'}. Min-Var, Equal-Wt &amp; IHSG are unchanged — they never read μ. Expect concentrated, high-turnover Max-Sharpe/Tail books: an unshrunk point estimate is the noisiest input in the problem, and the equilibrium prior is what the other three settings use to damp it. Compare, don&rsquo;t deploy.</span></>}
+                {usesSampleMean && <> · <span style={{ color: '#5B7A95' }}>The sample mean is the annualized trailing <b>252-bar</b> log-return mean, Ito-corrected to a simple total return (dividends included — the price series is adjusted close). A name with fewer than <b>60</b> bars in that window falls back to <b>r_f</b>, i.e. zero expected excess return, so the optimizer declines to hold it rather than reading a 0 as a bearish view{sparseNames.length ? <> — currently <b style={{ color: '#F59E0B' }}>{sparseNames.join(', ')}</b></> : ' — no included name is currently affected'}.</span></>}
+                {degenerate && <> · <span style={{ color: '#38BDF8' }}><b>Same run as Views={degenerate}.</b> With no prior these two settings produce an identical backtest, so this is served from the same cache entry rather than recomputed.</span></>}
+                {priorMode !== 'cap' && priorMode !== 'none' && <> · <span style={{ color: '#A78BFA' }}>Prior shifts Max-Sharpe &amp; Tail only (Min-Var ignores returns). Equal prior + no views ⇒ Max-Sharpe ≈ Equal-Wt (the equilibrium tangency); Shrunk sits between cap-weights and equal.</span></>}
                 {(posCap < 1 || sectorCap < 1) && <> · Caps reduce concentration (all strategies) but trim in-sample return.</>}
               </div>
             )}
@@ -588,7 +683,9 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
         <div style={{ fontSize: 10, color: '#5B7A95', marginTop: 4 }}>
           {GRID_KAPPAS.length}×{PRIORS.length} = {GRID_KAPPAS.length * PRIORS.length} cells at <b>{frequency}</b>, reduced fidelity —
           each overlays Max-Sharpe, Tail λ={lambda}, Min-Var, Equal-Wt, IHSG at the current λ/caps/universe.
-          Quarterly ~1–2 min; weekly is slow. Re-running a config is instant (cached).
+          Quarterly ~2–3 min; weekly is slow. Re-running a config is instant (cached). The <b>None</b> column
+          is plain Markowitz (sample-mean μ, no BL prior) — its Min-Var and Equal-Wt curves are identical to
+          the other columns&rsquo; by construction, so read only its Max-Sharpe and Tail lines.
         </div>
 
         {gridRunning && (
@@ -677,6 +774,18 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
             <Stat label="PATHS" value={refProv.paths != null ? String(refProv.paths) : '—'} sub="MC tail scenarios" />
             <Stat label="PRIOR" value={PRIOR_LABEL[refProv.priorMode] || refProv.priorMode || '—'} />
             <Stat
+              label="SIGNAL"
+              value={VIEW_LABEL[refProv.viewMode] || refProv.viewMode || 'None'}
+              sub={refProv.viewMode && refProv.viewMode !== 'off'
+                ? (() => {
+                  // Realized analyst coverage for the frequency actually charted — an artifact
+                  // must not read as "analyst-driven" when the archive reached part of it.
+                  const cov = refProv.viewCoverage?.[frequency] ?? Object.values(refProv.viewCoverage || {})[0];
+                  return cov ? `${(cov.coverage * 100).toFixed(0)}% analyst-served` : 'μ from views';
+                })()
+                : 'μ = prior ⇒ Max-Sharpe is the prior book'}
+            />
+            <Stat
               label="UNIVERSE"
               value={refProv.nTickers != null ? `${refProv.nTickers} names` : '—'}
               sub={refCurrent?.universeSelection?.mode === 'explicit'
@@ -740,7 +849,7 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
               ? <StrategyBacktest results={refCurrent} />
               : (
                 <div style={{ fontSize: 11, color: '#F59E0B', lineHeight: 1.7 }}>
-                  No artifact for the <b>{PRIOR_LABEL[refPrior]}</b> prior yet — these are local and gitignored, so a
+                  No reference artifact for <b>{PRIOR_LABEL[refPrior]}</b> yet — these are local and gitignored, so a
                   fresh clone starts without one. Pick your universe on the left, then hit{' '}
                   <b>Regenerate ({included.size})</b> above. The full sweep takes minutes; from a terminal it is{' '}
                   <code style={refCode}>PRIOR={refPrior} npm run backtest</code>.
@@ -752,16 +861,16 @@ export default function App({ history = null, dataVersion = null, isDefaultUnive
   );
 }
 
-function Toggle({ label, value, setValue, options }) {
+function Toggle({ label, value, setValue, options, disabled = false, title }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: disabled ? 0.4 : 1 }} title={title}>
       {label && <span style={{ fontSize: 10, letterSpacing: 1, color: '#5B7A95', fontWeight: 700 }}>{label}</span>}
       <span style={{ display: 'inline-flex', border: '1px solid #1E3A5F', borderRadius: 6, overflow: 'hidden' }}>
         {options.map(o => (
-          <button key={String(o.value)} onClick={() => setValue(o.value)} style={{
-            border: 'none', cursor: 'pointer', padding: '4px 11px', fontSize: 11, fontWeight: 700,
-            background: value === o.value ? '#8B5CF6' : 'transparent',
-            color: value === o.value ? '#0E0820' : '#7DA8C7',
+          <button key={String(o.value)} onClick={() => !disabled && setValue(o.value)} disabled={disabled} style={{
+            border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', padding: '4px 11px', fontSize: 11, fontWeight: 700,
+            background: value === o.value ? (disabled ? '#3A2E5C' : '#8B5CF6') : 'transparent',
+            color: value === o.value ? (disabled ? '#7DA8C7' : '#0E0820') : '#7DA8C7',
           }}>{o.label}</button>
         ))}
       </span>
@@ -820,7 +929,9 @@ function Shell({ children }) {
           no look-ahead, net of IDX transaction costs, for <b>your</b> stock selection. Pick a universe, frequency,
           tail-λ and turnover-penalty κ, then <b>Run backtest</b> (computed off the main thread). Σ = weekly ρ ×
           theta-decay daily σ, Ledoit-Wolf shrinkage; BL-equilibrium prior. Per-strategy return/risk attribution and
-          fee drag below. <b>Machinery only — no analyst views</b> (those drive the live forward-test).
+          fee drag below. <b>Views</b> switches μ between the machinery alone and the point-in-time analyst
+          archive (as-of only — a 2018 step sees the 2018 consensus); <b>τ</b> sets how far the posterior
+          travels from the prior toward those views, and is inert without both.
         </p>
         {children}
       </div>
