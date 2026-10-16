@@ -192,12 +192,14 @@ export default function App({ history = null, dataVersion = null, views = null, 
   const pendingMapRef = useRef(new Map()); // id → { kind:'main'|'grid', key, cellKey?, gen? }
   const cacheRef = useRef(new Map());   // signature → result
   const sentVersionRef = useRef(null);  // dataVersion already handed to the CURRENT worker
+  const sentViewsRef = useRef(null);    // views payload sent with it (arrives lazily, after history)
 
   // Spin up the worker once.
   useEffect(() => {
     const worker = new Worker(new URL('./backtestWorker.js', import.meta.url), { type: 'module' });
     // A fresh worker holds no history, whatever we sent the previous one.
     sentVersionRef.current = null;
+    sentViewsRef.current = null;
     worker.onmessage = (e) => {
       const msg = e.data || {};
       const p = pendingMapRef.current.get(msg.id);
@@ -231,10 +233,17 @@ export default function App({ history = null, dataVersion = null, views = null, 
   // Hand the worker an injected history payload once per universe. Structured-cloning
   // ~3 MB is cheap once, but not per job — so the worker caches it under `dataVersion`
   // and every job just references that string.
+  //
+  // The shell fetches the analyst archive LAZILY, so `views` can land after the worker was
+  // already primed for this dataVersion. Re-prime when it does — keying on dataVersion alone
+  // left the worker holding views=null, and a views run then fell through to the standalone
+  // /analyst-views.json path, which the workbench does not serve.
   const primeWorker = useCallback(() => {
-    if (!history || !dataVersion || sentVersionRef.current === dataVersion) return;
+    if (!history || !dataVersion) return;
+    if (sentVersionRef.current === dataVersion && sentViewsRef.current === views) return;
     workerRef.current?.postMessage({ type: 'init', history, dataVersion, views });
     sentVersionRef.current = dataVersion;
+    sentViewsRef.current = views;
   }, [history, dataVersion, views]);
 
   // Run (or replay from cache) a MAIN backtest for an explicit configuration object.
