@@ -23,7 +23,7 @@
  *       (the spread column is derived and ignored).
  *
  *       EVERY matching file is read, base file first and the rest alphabetically:
- *         bloomberg-12m-targets.csv        the 25 core names (UNIVERSE_JK)
+ *         bloomberg-12m-targets.csv        the 25 core names (CORE_TIER_JK)
  *         bloomberg-12m-targets-lq45.csv   LQ45 constituents the archive was missing
  *         bloomberg-12m-targets-broad.csv  wider IHSG names
  *       A ticker belongs to the FIRST file that carries it; a later file's block for
@@ -415,7 +415,7 @@ const out = {
     + 'implied upside is source-consistent and independent of the Yahoo price series the '
     + 'backtest trades on. Dates are AS-OF: a lookup at time t must take the newest row '
     + 'with date <= t. Every ticker carries the universe `tier` it entered through '
-    + "('core' = UNIVERSE_JK, 'lq45' = LQ45 names the archive was missing, 'broad' = wider "
+    + "('core' = CORE_TIER_JK, the original 25 research names, 'lq45' = LQ45 names the archive was missing, 'broad' = wider "
     + 'IHSG names) — see data/universe.js. Read via data/analyst-views.js — do not hand-edit.',
   horizonMonths: 12,
   coverage: {
@@ -445,8 +445,8 @@ const out = {
     + '(2026-06-19). They drive Black-Litterman Omega only; the target spine itself is fully dated.',
     'Bloomberg rows are Wednesdays; the backtest rebalances on the weekly (Friday) bar, so the as-of '
     + 'lookup picks up a view 2 days old at most on a fresh week. No look-ahead.',
-    'The archive is WIDER than the optimizer/forward-test universe. tier=core is the 25 names '
-    + 'UNIVERSE_JK trades; tier=lq45 and tier=broad exist so a backtest or sweep can opt into a '
+    'The archive is WIDER than the optimizer/forward-test universe. tier=core is the original 25 '
+    + 'research names (CORE_TIER_JK); tier=lq45 and tier=broad exist so a backtest or sweep can opt into a '
     + 'larger opportunity set. Adding a name here does NOT add it to any fetch script.',
     'Coverage is NOT uniform — see coverage.perTicker. Names with late starts or long gaps fall back '
     + 'to the trailing sample mean at steps the archive cannot cover (see analyst-views.js staleness).',

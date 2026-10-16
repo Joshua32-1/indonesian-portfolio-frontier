@@ -25,7 +25,7 @@ import {
 /** Bump when the stored shape changes so old entries are discarded, not misread. */
 const STORAGE_KEY = 'idx-workbench.universe.v1';
 
-/** The 25 names in portfolio-app/data/universe.js — imported, never duplicated. */
+/** UNIVERSE_JK from portfolio-app/data/universe.js — imported, never duplicated. */
 export const DEFAULT_SYMBOLS = [...UNIVERSE_JK];
 
 const UniverseCtx = createContext(null);

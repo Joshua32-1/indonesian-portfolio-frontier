@@ -16,7 +16,7 @@ The optimizer's edge has three layers. Only two are backtestable here:
 
 ### The signal axis (`VIEWS=`)
 
-The alpha signal used to be un-backtestable: only today's targets existed, so applying them to the past would have been look-ahead. That changed with [`portfolio-app/data/analyst-views.json`](../API.md#3b-analyst-viewsjson--the-point-in-time-target-archive-backtest-μ-signal) — a **15-year weekly archive of point-in-time 12-month consensus targets** (2011-08 → present, **86 names** — the 25 research names plus the LQ45 and broad-IHSG tiers). Every lookup is strictly as-of (`date <= t`), so a 2018 rebalance sees the consensus as it stood in 2018.
+The alpha signal used to be un-backtestable: only today's targets existed, so applying them to the past would have been look-ahead. That changed with [`portfolio-app/data/analyst-views.json`](../API.md#3b-analyst-viewsjson--the-point-in-time-target-archive-backtest-μ-signal) — a **15-year weekly archive of point-in-time 12-month consensus targets** (2011-08 → present, **86 names** — the 25 core-tier names plus the LQ45 and broad-IHSG tiers). Every lookup is strictly as-of (`date <= t`), so a 2018 rebalance sees the consensus as it stood in 2018.
 
 μ now has **two independent axes that compose**:
 

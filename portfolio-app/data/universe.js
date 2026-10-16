@@ -32,13 +32,18 @@
 /**
  * RESEARCH universe — optimizer app + backtester. Edit freely; the live forward
  * test does not read this list. Use the Yahoo `.JK` suffix.
+ *
+ * Currently the 36-name live holdings book (2026-10-16). It is NOT the archive's
+ * 'core' tier — that is CORE_TIER_JK below, so editing this list never relabels
+ * analyst-views.json.
  */
 export const UNIVERSE_JK = [
-  'BBCA.JK', 'BBRI.JK', 'BMRI.JK', 'TLKM.JK', 'ASII.JK', 'BIRD.JK',
-  'INDF.JK', 'ICBP.JK', 'JSMR.JK', 'KLBF.JK', 'SIDO.JK', 'ANTM.JK',
-  'BBNI.JK', 'BNGA.JK', 'CMRY.JK', 'PWON.JK', 'AMRT.JK', 'INCO.JK',
-  'NCKL.JK', 'MDKA.JK', 'AADI.JK', 'UNTR.JK', 'LSIP.JK', 'CPIN.JK',
-  'ISAT.JK',
+  'WIFI.JK', 'RAJA.JK', 'DEWA.JK', 'TPIA.JK', 'PANI.JK', 'EMAS.JK',
+  'KLBF.JK', 'BRMS.JK', 'ARCI.JK', 'AMMN.JK', 'CSIS.JK', 'ICBP.JK',
+  'ANTM.JK', 'UNTR.JK', 'MDKA.JK', 'CUAN.JK', 'PWON.JK', 'HEAL.JK',
+  'BNGA.JK', 'NCKL.JK', 'MYOR.JK', 'INDF.JK', 'JSMR.JK', 'INDY.JK',
+  'BIRD.JK', 'MIDI.JK', 'ISAT.JK', 'HRTA.JK', 'ASII.JK', 'AMRT.JK',
+  'CPIN.JK', 'JPFA.JK', 'INCO.JK', 'CMRY.JK', 'TLKM.JK', 'LSIP.JK',
 ];
 
 /**
@@ -76,16 +81,17 @@ export const toJK = t => (t.endsWith('.JK') ? t : `${t}.JK`);
  * UNIVERSE TIERS — how far out the analyst-view archive reaches
  * ─────────────────────────────────────────────────────────────────────────────
  * The Bloomberg 12-month-target archive (data/analyst-views.json) was extended
- * beyond the 25 research names in three tranches, and every ticker in it carries
+ * beyond the 25 original research names in three tranches, and every ticker in it carries
  * the tier it entered through:
  *
- *   'core'   UNIVERSE_JK — the 25 names the optimizer and the forward test run on.
+ *   'core'   CORE_TIER_JK — the 25 names of the original research universe (and
+ *            the pinned forward test), from the first Bloomberg export.
  *   'lq45'   LQ45 constituents that were NOT already core, from the
  *            "LQ45 constituents not recorded yet" export.
  *   'broad'  wider IHSG names, from the broad-market export.
  *
  * The tiers are DISJOINT by construction — a ticker is listed once, under the
- * narrowest tier it belongs to — so `[...UNIVERSE_JK, ...LQ45_ADDITIONS_JK,
+ * narrowest tier it belongs to — so `[...CORE_TIER_JK, ...LQ45_ADDITIONS_JK,
  * ...BROAD_ADDITIONS_JK]` has no duplicates and the tier reads as a single label.
  * They NEST in meaning: every core name is also an LQ45/IHSG name; every LQ45
  * addition is also an IHSG name. Use `tierAtMost()` when you want that nesting.
@@ -98,10 +104,26 @@ export const toJK = t => (t.endsWith('.JK') ? t : `${t}.JK`);
  *
  * ⚠️  LQ45_ADDITIONS_JK is NOT the LQ45 index. It is the part of LQ45 the archive
  * was missing; the core names that are also LQ45 constituents stay tagged 'core'.
+ *
+ * ⚠️  The tiers are ARCHIVE labels, so they key off CORE_TIER_JK — never UNIVERSE_JK.
+ * The research list is free to change (it now overlaps lq45/broad names); the labels
+ * already written into analyst-views.json must not move when it does.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-/** LQ45 constituents added to the archive that are not in UNIVERSE_JK (25 names). */
+/**
+ * The archive's 'core' tier (25 names) — a LITERAL, frozen copy of the original research
+ * universe the first Bloomberg export covered. Decoupled from UNIVERSE_JK on 2026-10-16.
+ */
+export const CORE_TIER_JK = Object.freeze([
+  'BBCA.JK', 'BBRI.JK', 'BMRI.JK', 'TLKM.JK', 'ASII.JK', 'BIRD.JK',
+  'INDF.JK', 'ICBP.JK', 'JSMR.JK', 'KLBF.JK', 'SIDO.JK', 'ANTM.JK',
+  'BBNI.JK', 'BNGA.JK', 'CMRY.JK', 'PWON.JK', 'AMRT.JK', 'INCO.JK',
+  'NCKL.JK', 'MDKA.JK', 'AADI.JK', 'UNTR.JK', 'LSIP.JK', 'CPIN.JK',
+  'ISAT.JK',
+]);
+
+/** LQ45 constituents added to the archive that are not in CORE_TIER_JK (25 names). */
 export const LQ45_ADDITIONS_JK = Object.freeze([
   'AMMN.JK', 'BRPT.JK', 'GOTO.JK', 'BUMI.JK', 'ADRO.JK', 'INKP.JK',
   'CUAN.JK', 'MBMA.JK', 'PGAS.JK', 'EXCL.JK', 'MAPI.JK', 'UNVR.JK',
@@ -145,7 +167,7 @@ export const HISTORICAL_MEMBERS_JK = Object.freeze([
 
 /** Every ticker the analyst-view archive covers: core ++ LQ45 ++ broad (86). */
 export const EXTENDED_UNIVERSE_JK = Object.freeze([
-  ...UNIVERSE_JK, ...LQ45_ADDITIONS_JK, ...BROAD_ADDITIONS_JK,
+  ...CORE_TIER_JK, ...LQ45_ADDITIONS_JK, ...BROAD_ADDITIONS_JK,
 ]);
 
 /** Every ticker with an archive entry, INCLUDING names that have left the index (126). */
@@ -164,7 +186,7 @@ export const UNIVERSE_TIERS = Object.freeze(['core', 'lq45', 'broad', 'historica
 
 /** Bare ticker → 'core' | 'lq45' | 'broad'. Frozen; built once from the lists. */
 export const UNIVERSE_TIER = Object.freeze(Object.fromEntries([
-  ...UNIVERSE_JK.map(t => [toBare(t), 'core']),
+  ...CORE_TIER_JK.map(t => [toBare(t), 'core']),
   ...LQ45_ADDITIONS_JK.map(t => [toBare(t), 'lq45']),
   ...BROAD_ADDITIONS_JK.map(t => [toBare(t), 'broad']),
   ...HISTORICAL_MEMBERS_JK.map(t => [toBare(t), 'historical']),

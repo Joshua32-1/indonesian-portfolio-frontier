@@ -18,7 +18,7 @@ import {
   DEFAULT_MAX_STALENESS_DAYS, DEFAULT_MAX_Q, DEFAULT_STABILITY,
 } from '../data/analyst-views.js';
 import {
-  UNIVERSE_JK, LQ45_ADDITIONS_JK, BROAD_ADDITIONS_JK, EXTENDED_UNIVERSE_JK,
+  CORE_TIER_JK, LQ45_ADDITIONS_JK, BROAD_ADDITIONS_JK, EXTENDED_UNIVERSE_JK,
   UNIVERSE_TIERS, tierOf, tierAtMost, toBare,
 } from '../data/universe.js';
 import { ttmYieldAsOf, makeYieldLookup, shiftISO, DEFAULT_WINDOW_DAYS } from '../data/dividends.js';
@@ -256,13 +256,13 @@ if (!existsSync(archivePath)) {
     tickers.every(tk => A.tickers[tk].tier === tierOf(tk)),
     tickers.filter(tk => A.tickers[tk].tier !== tierOf(tk)).join(', '));
 
-  const tierLists = [UNIVERSE_JK, LQ45_ADDITIONS_JK, BROAD_ADDITIONS_JK].map(l => l.map(toBare));
+  const tierLists = [CORE_TIER_JK, LQ45_ADDITIONS_JK, BROAD_ADDITIONS_JK].map(l => l.map(toBare));
   const flat = tierLists.flat();
   ok('tier lists are DISJOINT (a ticker is listed once)', new Set(flat).size === flat.length,
     flat.filter((t, i) => flat.indexOf(t) !== i).join(', '));
   ok('tierAtMost nests: core ⊆ lq45 ⊆ broad',
-    tierAtMost('core').length === UNIVERSE_JK.length
-    && tierAtMost('lq45').length === UNIVERSE_JK.length + LQ45_ADDITIONS_JK.length
+    tierAtMost('core').length === CORE_TIER_JK.length
+    && tierAtMost('lq45').length === CORE_TIER_JK.length + LQ45_ADDITIONS_JK.length
     && tierAtMost('broad').length === EXTENDED_UNIVERSE_JK.length);
 
   const missing = EXTENDED_UNIVERSE_JK.map(toBare).filter(t => !A.tickers[t]);
@@ -275,10 +275,11 @@ if (!existsSync(archivePath)) {
     UNIVERSE_TIERS.every(t => (byTier[t]?.tickers ?? 0) === (recount[t] ?? 0)),
     JSON.stringify(recount));
 
-  // The forward test must NOT widen by accident: the core tier is exactly UNIVERSE_JK.
+  // The core tier is a frozen archive label (CORE_TIER_JK), decoupled from the editable
+  // research list UNIVERSE_JK — so a research-universe edit can never relabel the archive.
   const coreArchive = tickers.filter(tk => A.tickers[tk].tier === 'core').sort();
-  ok('tier=core is exactly UNIVERSE_JK',
-    coreArchive.join(',') === UNIVERSE_JK.map(toBare).sort().join(','));
+  ok('tier=core is exactly CORE_TIER_JK',
+    coreArchive.join(',') === CORE_TIER_JK.map(toBare).sort().join(','));
 
   // ── THE look-ahead guard: exhaustive over every (ticker × row) boundary ──────
   section('look-ahead guard (exhaustive)');
