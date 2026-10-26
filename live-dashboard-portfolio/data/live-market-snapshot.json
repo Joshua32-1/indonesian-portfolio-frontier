@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-23T15:41:32.981Z",
+  "generated": "2026-10-26T17:14:41.509Z",
   "description": "IDX Live Dashboard — daily adjusted close",
   "historyRange": {
     "start": "2026-06-30",
@@ -261,7 +261,7 @@
         2824156084563,
         1555935962185,
         1923077376651,
-        0
+        2159583884473
       ]
     }
   },
