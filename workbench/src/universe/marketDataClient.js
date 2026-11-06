@@ -132,6 +132,30 @@ export async function loadUniverse(symbols, { onProgress, signal, force = false 
   };
 }
 
+/**
+ * The analyst-target archive for a universe, from /api/views.
+ *
+ * LAZY AND OPTIONAL by design. It is the only payload here that a session may never need
+ * — the backtester defaults to Views=None — and it is the largest per-name, so it is not
+ * folded into loadUniverse(). The caller fetches it when a view mode is first selected.
+ *
+ * `from` clips the series server-side to the window a walk-forward will actually score.
+ * Resolves to null on any failure: a missing archive must degrade to "no analyst signal
+ * available", never break the page. The worker refuses to run a view mode without it, so
+ * a null here can't be mistaken for coverage.
+ */
+export async function loadViews(symbols, { from = null, signal } = {}) {
+  const bare = [...new Set(symbols.map(toBare))];
+  if (!bare.length) return null;
+  const qs = new URLSearchParams({ tickers: bare.join(',') });
+  if (from) qs.set('from', from);
+  try {
+    return await getJson(`/api/views?${qs}`, signal);
+  } catch {
+    return null;
+  }
+}
+
 // ── Contract adapters ─────────────────────────────────────────────────────────
 
 /**

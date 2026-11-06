@@ -35,11 +35,42 @@ import {
 } from '../../portfolio-app/src/math/matrixEngine.js';
 import { findMinVariancePortfolio, optimizeTailAware } from '../../portfolio-app/src/math/monteCarlo.js';
 import { makeRng } from '../../portfolio-app/src/math/robustObjective.js';
-import { computeEquilibriumReturns, defaultDelta } from '../../portfolio-app/src/math/blackLitterman.js';
+import {
+  computeEquilibriumReturns, defaultDelta,
+  computeViewUncertainty, blackLittermanPosterior,
+} from '../../portfolio-app/src/math/blackLitterman.js';
+import { makeViewLookup, DEFAULT_MAX_STALENESS_DAYS } from '../../portfolio-app/data/analyst-views.js';
 import { makeRateLookup, meanRateOver, perPeriodRate, BI_RATE_FALLBACK, INSTRUMENT_SWITCH_DATE } from '../../portfolio-app/data/bi-rate.js';
 import { sharpeFromExcess } from '../../portfolio-app/src/math/performance.js';
+import { snapshotAsOf } from '../../portfolio-app/data/index-members.js';
 
 const CORR_WINDOW_DAYS = 365; // trailing 1-year weekly correlation window
+const TRADING_DAYS = 252;             // annualization factor; mirrors matrixEngine's SQRT_252
+const MIN_SAMPLE_MEAN_OBS = 60;       // ~1 quarter — below this a sample mean is noise, not an estimate
+
+// Valid μ sources. The first three are Black-Litterman equilibrium priors (μ reverse-optimized
+// from reference weights); 'none' skips the prior and estimates μ from the trailing window.
+// Validated rather than defaulted: an unrecognised string used to fall through to the 'cap'
+// branch, so a typo produced a cap-prior run reported under the misspelled name.
+export const PRIOR_MODES = ['cap', 'shrunk', 'equal', 'none'];
+
+// Valid μ SIGNAL sources — orthogonal to PRIOR_MODES, which only sets the ANCHOR.
+//
+//   'off'      no views. μ is the anchor itself (π), or the trailing sample mean when
+//              priorMode is 'none'. This is the historical behavior, bit-for-bit.
+//   'analyst'  analyst 12-month targets where the archive covers the name at that step.
+//              Names with no view keep the anchor — they are simply not tilted.
+//   'hybrid'   analyst targets where available, TRAILING 1-YEAR SAMPLE MEAN everywhere
+//              else, so every name always carries an expected return.
+//   'sample'   the trailing sample mean for every name, expressed as a view. With
+//              priorMode 'none' this reproduces plain Markowitz exactly.
+export const VIEW_MODES = ['off', 'analyst', 'hybrid', 'sample'];
+
+// Ω for a view that came from a trailing sample mean rather than an analyst: no coverage
+// and no dispersion, so computeViewUncertainty's coverage term (maxAnalysts/1)^conf makes
+// it a deliberately LOW-confidence view. That is the intended reading — a sample mean is
+// the noisiest input in the problem — and it is why 'hybrid' does not simply overwrite π.
+const SAMPLE_VIEW_ANALYSTS = 1;
 
 /**
  * Earliest date the walk-forward is allowed to start, independent of listing dates.
@@ -662,14 +693,196 @@ function rebalanceGrid(rows, step) {
   return rows.filter((_, i) => i >= offset && (i - offset) % step === 0);
 }
 
-/** Build per-step context (Σ, μ_eq, realized returns, ADV) once for a rebalance grid. */
-function buildStepContexts(grid, ctx) {
+/**
+ * Sample-mean expected returns — the "no prior" μ, i.e. textbook Markowitz mean-variance.
+ *
+ * The three BL prior modes ('cap' / 'shrunk' / 'equal') never estimate μ from returns at all:
+ * they reverse-optimize it out of reference weights (π = r_f + δΣw). This is the alternative
+ * the equilibrium prior exists to avoid — estimate μ directly from the trailing window and
+ * let the optimizer do what it likes with it.
+ *
+ * Same information set as Σ: it reads `meta.dailyReturns`, the identical trailing-252-day
+ * slice (all dates ≤ t) that buildStepContexts already cut for the vol estimate, so no new
+ * look-ahead is introduced and the mean and the covariance always describe the same window.
+ *
+ * UNITS — the one place this is easy to get wrong. `dailyReturns` are LOG returns
+ * (dailyLogReturns), while every consumer of μ downstream wants an ANNUAL SIMPLE total
+ * return: the Sharpe objective subtracts r_f from wᵀμ, and robustObjective's realization
+ * path converts back with ln(1+μ) − Σᵢᵢ/2 (Ito). So invert exactly that:
+ *
+ *   m   = mean(daily log returns) × 252        annualized log drift
+ *   μᵢ  = exp(m + Σᵢᵢ/2) − 1                 annual simple total return
+ *
+ * using the same shrunk annual variance Σᵢᵢ the objective itself uses. Skipping the
+ * ½σ² term would systematically understate μ on the most volatile names — by ~2.6%/yr at
+ * a 23% annual vol — which is a silent tilt against exactly the names Σ already penalizes.
+ *
+ * The mean is EQUAL-weighted over the window even though the vol is theta-decayed. That is
+ * deliberate: a sample mean is already the noisiest input in the problem (its standard error
+ * falls only as √T), and decay-weighting it would cut the effective sample further. This is
+ * the textbook estimator, which is the point of the option.
+ *
+ * Names with too little history fall back to r_f — zero expected excess return, so the
+ * optimizer simply declines to hold them, rather than a 0 that would read as a real
+ * negative view once r_f is subtracted.
+ *
+ * @param {{meta:{dailyReturns:number[]}}[]} volAssets  per-asset trailing daily LOG returns
+ * @param {number[][]} covMatrix  annualized covariance (post-shrinkage)
+ * @param {number} rfStep  r_f in effect at this rebalance date
+ * @returns {number[]} annual simple total returns, one per asset
+ */
+function sampleMeanReturns(volAssets, covMatrix, rfStep) {
+  return volAssets.map((a, i) => {
+    const r = a.meta.dailyReturns;
+    if (!r || r.length < MIN_SAMPLE_MEAN_OBS) return rfStep;
+    const mLog = r.reduce((s, v) => s + v, 0) / r.length * TRADING_DAYS;
+    const varAnn = Math.max(covMatrix[i][i], 0);
+    return Math.exp(mLog + varAnn / 2) - 1;
+  });
+}
+
+/**
+ * Point-in-time flavour of buildRiskContexts: at each rebalance, Σ / vol / prior are built
+ * over ONLY the names that were in the index on that date (newest snapshot dated <= t) and
+ * had a full correlation window of history — never over today's members.
+ *
+ * Why this exists: pre-selecting today's index members hands the optimizer a set filtered
+ * on outcomes (a name is in LQ45 now because it grew). Measured on this repo's LQ45 tier
+ * that was worth ~0.68 of Sharpe. See portfolio-app/data/index-members.js.
+ *
+ * Shape: the run keeps ONE full universe U (every name that was ever a member in the
+ * window). Each step optimizes on the subset `idx` ⊂ U and carries FULL-length rVec/advVec
+ * (zero outside the subset) so drift and costs stay index-aligned across steps. Names that
+ * enter the index are bought at the step they qualify; names that leave are sold — both
+ * charged through the ordinary drift-adjusted turnover cost.
+ *
+ * Eligibility = member(t) AND first weekly bar <= t − 365d (the same full-window rule the
+ * fixed-universe walk applies to its newest listing) AND a positive price at t. The
+ * 365d rule withholds a fresh IPO for its first year even if the index already holds it —
+ * conservative, never look-ahead. Counts are returned in `pitStats` so the drop is visible.
+ */
+function buildRiskContextsPIT(grid, ctx) {
   const { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife,
-    benchByKey, sharesOut, capMode, rf, rfAt, priorMode = 'cap', useSectors = false } = ctx;
+    benchByKey, rf, rfAt, useSectors = false, pit } = ctx;
+  const rateOn = rfAt ?? (() => rf);
+  const N = included.length;
+  const slot = new Map(included.map((a, k) => [a.ticker, k]));
+  const firstBar = included.map(a => a.weekly?.dates?.[0] ?? '9999-12-31');
+  const risk = [];
+  let lookAhead = null;
+  const stats = { steps: 0, memberSteps: 0, eligibleSteps: 0, noHistory: 0, noPrice: 0,
+    notInHistory: 0, minEligible: Infinity, maxEligible: 0, noHistoryByTicker: {},
+    // Index weight (%, summed over steps) the archive says was in the index vs the part of it
+    // the run could NOT hold. Yahoo keeps no bars for delisted/suspended names (SRIL, WSKT,
+    // TRAM…), so the worst collapses are missing — droppedWeight/totalWeight is the size of
+    // the survivorship that remains, and it errs OPTIMISTIC.
+    totalWeight: 0, droppedWeight: 0 };
+
+  for (let i = 0; i < grid.length - 1; i++) {
+    const row = grid[i], rowNext = grid[i + 1];
+    const t = row.date, tNext = rowNext.date;
+    const startISO = addCalendarDays(t, -CORR_WINDOW_DAYS);
+    const dailyCutoff = addCalendarDays(t, 4);
+    const histCutoff = addCalendarDays(t, -CORR_WINDOW_DAYS);
+
+    const snap = snapshotAsOf(pit.membership, t);
+    if (!snap) throw new Error(`No index-membership snapshot on or before ${t} — start the window later.`);
+    const idx = [], memberRows = [];
+    for (const m of snap.members) {
+      stats.memberSteps++;
+      stats.totalWeight += m.weight ?? 0;
+      const k = slot.get(m.ticker);
+      if (k == null) { stats.notInHistory++; stats.droppedWeight += m.weight ?? 0; continue; }
+      if (firstBar[k] > histCutoff) {
+        stats.noHistory++;
+        stats.droppedWeight += m.weight ?? 0;
+        stats.noHistoryByTicker[m.ticker] = (stats.noHistoryByTicker[m.ticker] ?? 0) + 1;
+        continue;
+      }
+      if (!(row[m.ticker] > 0)) { stats.noPrice++; stats.droppedWeight += m.weight ?? 0; continue; }
+      idx.push(k); memberRows.push(m);
+    }
+    stats.steps++;
+    stats.eligibleSteps += idx.length;
+    stats.minEligible = Math.min(stats.minEligible, idx.length);
+    stats.maxEligible = Math.max(stats.maxEligible, idx.length);
+    if (idx.length < 2) throw new Error(`Only ${idx.length} eligible index member(s) at ${t}.`);
+
+    const subCorr = idx.map(k => corrAssets[k]);
+    const { matrix, obs } = computeCorrelationFromDateRange(subCorr, startISO, t);
+    const volAssets = idx.map(k => {
+      const end = idxAtOrBefore(dailyRet[k].dates, dailyCutoff);
+      const lo = Math.max(0, end + 1 - 252);
+      const slice = end >= 0 ? dailyRet[k].vals.slice(lo, end + 1) : [];
+      if (end >= 0 && dailyRet[k].dates[end] >= tNext && !lookAhead) {
+        lookAhead = `${dailyRet[k].dates[end]} >= next ${tNext}`;
+      }
+      const a = included[k];
+      const sector = useSectors ? (SECTOR_MAP[a.ticker] ?? 'Other') : 'ALL';
+      return { ticker: a.ticker, sector, meta: { dailyReturns: slice } };
+    });
+    const { covMatrix } = computeCovarianceMatrix(matrix, volAssets, { volHalfLife, shrinkage: true, nObs: obs });
+
+    const rfStep = rateOn(t);
+
+    // FULL-length realized returns / ADV: zero outside the step's subset.
+    const rVec = new Array(N).fill(0);
+    const advVec = hasLiquidity ? new Array(N).fill(0) : null;
+    for (const k of idx) {
+      const tk = included[k].ticker;
+      const p0 = row[tk], p1 = rowNext[tk];
+      rVec[k] = p0 > 0 && p1 != null ? p1 / p0 - 1 : 0;
+      if (hasLiquidity) {
+        const end = idxAtOrBefore(dailyDV[k].dates, dailyCutoff);
+        if (end >= 0) {
+          const lo = Math.max(0, end + 1 - COST.advWindow);
+          const win = dailyDV[k].dv.slice(lo, end + 1);
+          advVec[k] = win.length ? win.reduce((acc, v) => acc + v, 0) / win.length : 0;
+        }
+      }
+    }
+    const b0 = benchByKey.get(t), b1 = benchByKey.get(tNext);
+    const ihsgRet = b0 > 0 && b1 != null ? b1 / b0 - 1 : 0;
+
+    // The index's own dated weights over the eligible names — the honest "just buy the
+    // index" baseline, and (via shares) the dated cap-prior input.
+    const wSum = memberRows.reduce((acc, m) => acc + (m.weight > 0 ? m.weight : 0), 0);
+    const indexW = new Array(N).fill(0);
+    memberRows.forEach((m, j) => { indexW[idx[j]] = wSum > 0 ? Math.max(m.weight, 0) / wSum : 1 / idx.length; });
+
+    risk.push({
+      t, tNext, covMatrix, volAssets, rVec, advVec, ihsgRet, rf: rfStep,
+      px: idx.map(k => row[included[k].ticker]),
+      // ── PIT extras (read by attachMu / the walkers / the baselines) ──
+      idx, indexW,
+      included: idx.map(k => included[k]),
+      sharesOut: memberRows.map(m => (m.shares > 0 ? m.shares : 0)),   // DATED shares (millions)
+    });
+  }
+  if (!Number.isFinite(stats.minEligible)) stats.minEligible = 0;
+  return { risk, lookAhead, pitStats: stats };
+}
+
+/**
+ * Build the EXPENSIVE, μ-INDEPENDENT half of each step: Σ, the vol assets, realized
+ * returns, ADV and r_f. Nothing here depends on priorMode / viewMode / factorConfig, so
+ * one build is reusable across every μ configuration over the same (universe, frequency,
+ * volHalfLife, window).
+ *
+ * That reuse is the point: the covariance construction costs ~34 ms/step against ~4-5 ms
+ * for one optimizer walk, so a config sweep that rebuilt Σ per config would spend roughly
+ * half its time recomputing an identical matrix. See scripts/sweep-configs.mjs.
+ *
+ * `px` (the per-asset price at t) is carried so the cap-weight prior can be formed later
+ * without re-reading the grid.
+ */
+export function buildRiskContexts(grid, ctx) {
+  if (ctx.pit) return buildRiskContextsPIT(grid, ctx);
+  const { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife,
+    benchByKey, rf, rfAt, useSectors = false } = ctx;
   // Fall back to the flat rate when no lookup was supplied (direct callers / older tests).
   const rateOn = rfAt ?? (() => rf);
-  const n = included.length;
-  const contexts = [];
+  const risk = [];
   let lookAhead = null;
   for (let i = 0; i < grid.length - 1; i++) {
     const row = grid[i], rowNext = grid[i + 1];
@@ -692,31 +905,8 @@ function buildStepContexts(grid, ctx) {
     });
     const { covMatrix } = computeCovarianceMatrix(matrix, volAssets, { volHalfLife, shrinkage: true, nObs: obs });
 
-    // Equilibrium-prior reference weights w_prior. capMode='equal' (shares unreliable) forces
-    // equal regardless of priorMode. Otherwise priorMode picks: 'cap' = market-cap (sharesOut ×
-    // price(t)), 'equal' = 1/n, 'shrunk' = 50/50 blend (both inputs sum to 1 → blend does too).
-    const equalW = Array(n).fill(1 / n);
-    let capW;
-    if (capMode !== 'cap' || priorMode === 'equal') {
-      capW = equalW;
-    } else {
-      const caps = included.map((a, k) => {
-        const px = row[a.ticker];
-        return px > 0 && sharesOut[k] > 0 ? px * sharesOut[k] : 0;
-      });
-      const s = caps.reduce((acc, v) => acc + v, 0);
-      const capRaw = s > 0 ? caps.map(v => v / s) : equalW;
-      capW = priorMode === 'shrunk' ? capRaw.map((v, k) => 0.5 * v + 0.5 * equalW[k]) : capRaw;
-    }
     // r_f as of THIS rebalance date, not as of today.
     const rfStep = rateOn(t);
-    const delta = defaultDelta(covMatrix, capW, rfStep);
-    // computeEquilibriumReturns returns TOTAL returns (π = r_f + δ·Σ·w) — the space the shared
-    // Sharpe objective expects (it subtracts r_f itself). Since the book is fully invested
-    // (Σw=1), wᵀπ − r_f = wᵀ(δΣw), the true tangency numerator. Without the r_f gross-up in π,
-    // the −r_f/σ term would reward variance → Max-Sharpe/Tail blow out into concentrated,
-    // high-turnover portfolios.
-    const muEq = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rfStep, delta });
 
     const rVec = included.map(a => {
       const p0 = row[a.ticker], p1 = rowNext[a.ticker];
@@ -735,9 +925,166 @@ function buildStepContexts(grid, ctx) {
         return win.length ? win.reduce((s, v) => s + v, 0) / win.length : 0;
       });
     }
-    contexts.push({ t, tNext, covMatrix, volAssets, muEq, rVec, advVec, ihsgRet, rf: rfStep });
+    risk.push({ t, tNext, covMatrix, volAssets, rVec, advVec, ihsgRet, rf: rfStep,
+      px: included.map(a => row[a.ticker]) });
   }
-  return { contexts, lookAhead };
+  return { risk, lookAhead };
+}
+
+/**
+ * Attach μ to prebuilt risk contexts. CHEAP — this is the half that varies per config,
+ * and the only half a config sweep needs to redo. Pure: returns new context objects and
+ * never mutates the risk array it is given, so one risk build feeds many configs.
+ */
+export function attachMu(risk, ctx) {
+  const { included, sharesOut, capMode, priorMode = 'cap',
+    viewMode = 'off', viewLookup = null, factorConfig = null } = ctx;
+  if (!PRIOR_MODES.includes(priorMode)) {
+    throw new Error(`Unknown priorMode "${priorMode}" (expected ${PRIOR_MODES.join(' | ')}).`);
+  }
+  if (!VIEW_MODES.includes(viewMode)) {
+    throw new Error(`Unknown viewMode "${viewMode}" (expected ${VIEW_MODES.join(' | ')}).`);
+  }
+  // A view mode that needs the archive but has no lookup would silently degrade to the
+  // sample-mean fallback on every name — i.e. report itself as view-driven while using
+  // no views at all. Fail loudly instead.
+  if ((viewMode === 'analyst' || viewMode === 'hybrid') && !viewLookup) {
+    throw new Error(`viewMode "${viewMode}" needs an analyst-view archive — pass opts.views (see loadAnalystViews).`);
+  }
+  const contexts = [];
+  let viewCells = 0, viewCovered = 0;   // ticker-steps offered vs actually served by a target
+  for (const step of risk) {
+    const { t, covMatrix, volAssets, px: pxAt } = step;   // pxAt = price per asset at t
+    const rfStep = step.rf;
+    // Point-in-time membership runs carry their OWN asset set (and dated shares) per step:
+    // the names in the index and eligible at t. Fixed-universe runs fall through to the
+    // run-wide `included` / `sharesOut`, so their behaviour is unchanged.
+    const inc = step.included ?? included;
+    const sh = step.sharesOut ?? sharesOut;
+    const n = inc.length;
+
+    // ── μ assembly ──────────────────────────────────────────────────────────────
+    // Two independent axes that compose:
+    //
+    //   priorMode (ANCHOR)  'cap' | 'shrunk' | 'equal' → the Black-Litterman equilibrium
+    //     π = r_f + δ·Σ·w_prior, reverse-optimized from reference weights. 'none' → no anchor.
+    //   viewMode (SIGNAL)   where each name's expected return comes from. See VIEW_MODES.
+    //
+    // With an anchor, the signal enters as BL views Q and the optimizer sees the posterior.
+    // Without one, the signal IS μ. viewMode 'off' + any priorMode reproduces the historical
+    // behavior exactly: no view vector is built and π (or the sample mean) is used directly.
+    //
+    // NOTE ON THE π-ONLY PATH: max-Sharpe on π alone returns the prior weights identically
+    // (w ∝ Σ⁻¹(π − r_f·1) = Σ⁻¹δΣw_prior ∝ w_prior), so with viewMode 'off' the Max-Sharpe
+    // variant is the cap-weighted book by construction. A signal is what breaks that identity.
+
+    // Equilibrium-prior reference weights w_prior. capMode='equal' (shares unreliable) forces
+    // equal regardless of priorMode. Otherwise priorMode picks: 'cap' = market-cap (sharesOut ×
+    // price(t)), 'equal' = 1/n, 'shrunk' = 50/50 blend (both inputs sum to 1 → blend does too).
+    let pi = null;
+    if (priorMode !== 'none') {
+      const equalW = Array(n).fill(1 / n);
+      let capW;
+      if (capMode !== 'cap' || priorMode === 'equal') {
+        capW = equalW;
+      } else {
+        const caps = inc.map((a, k) => {
+          const p = pxAt[k];
+          return p > 0 && sh[k] > 0 ? p * sh[k] : 0;
+        });
+        const s = caps.reduce((acc, v) => acc + v, 0);
+        const capRaw = s > 0 ? caps.map(v => v / s) : equalW;
+        capW = priorMode === 'shrunk' ? capRaw.map((v, k) => 0.5 * v + 0.5 * equalW[k]) : capRaw;
+      }
+      const delta = defaultDelta(covMatrix, capW, rfStep);
+      // computeEquilibriumReturns returns TOTAL returns (π = r_f + δ·Σ·w) — the space the shared
+      // Sharpe objective expects (it subtracts r_f itself). Since the book is fully invested
+      // (Σw=1), wᵀπ − r_f = wᵀ(δΣw), the true tangency numerator. Without the r_f gross-up in π,
+      // the −r_f/σ term would reward variance → Max-Sharpe/Tail blow out into concentrated,
+      // high-turnover portfolios.
+      pi = computeEquilibriumReturns(covMatrix, capW, { riskFreeRate: rfStep, delta });
+    }
+
+    // The trailing sample mean is computed at most once per step, and only if a mode needs it.
+    let sampleMu = null;
+    const sampleAt = () => (sampleMu ??= sampleMeanReturns(volAssets, covMatrix, rfStep));
+
+    let muEq;
+    let stepViews = 0;              // names carrying a REAL analyst view at this step
+    if (viewMode === 'off') {
+      muEq = pi ?? sampleAt();
+    } else {
+      // Q, plus which names carry a view at all (ω → ∞ for the rest, i.e. "no opinion").
+      const Q = new Array(n);
+      const hasView = new Array(n).fill(false);
+      const viewMeta = new Array(n).fill(null);
+
+      if (viewMode !== 'sample' && viewLookup) {
+        for (let k = 0; k < n; k++) {
+          // As-of lookup: the newest target dated ON OR BEFORE this rebalance. Never after.
+          const v = viewLookup(inc[k].ticker, t);
+          if (!v) continue;
+          Q[k] = v.totalReturn;     // 12-month TOTAL return — same space as π
+          hasView[k] = true;
+          viewMeta[k] = v;
+          stepViews++;
+        }
+      }
+      for (let k = 0; k < n; k++) {
+        if (hasView[k]) continue;
+        if (viewMode === 'hybrid' || viewMode === 'sample') {
+          Q[k] = sampleAt()[k];     // ← the fallback: trailing 1-year mean stands in for a target
+          hasView[k] = true;
+        } else {
+          Q[k] = pi ? pi[k] : sampleAt()[k];   // 'analyst': untilted, left at the anchor
+        }
+      }
+
+      if (!pi) {
+        muEq = Q;                   // no anchor — the signal is μ outright
+      } else {
+        // Ω from the archive's dated dispersion + analyst coverage. computeViewUncertainty
+        // reads forwardEstimates, so rebuild the minimal shape it needs: dispersion d is
+        // reproduced exactly by low/mean/high = (1 − d/2, 1, 1 + d/2).
+        const omegaAssets = inc.map((a, k) => {
+          const d = viewMeta[k]?.dispersion ?? 0;
+          return {
+            forwardEstimates: {
+              meanTarget: 1, lowTarget: 1 - d / 2, highTarget: 1 + d / 2,
+              totalAnalysts: viewMeta[k]?.analysts ?? SAMPLE_VIEW_ANALYSTS,
+            },
+          };
+        });
+        const maxAnalysts = Math.max(1, ...omegaAssets.map(x => x.forwardEstimates.totalAnalysts));
+        const omega = computeViewUncertainty(omegaAssets, covMatrix, factorConfig, maxAnalysts);
+        for (let k = 0; k < n; k++) if (!hasView[k]) omega[k] = 1e12; // no view ⇒ ignored
+        muEq = blackLittermanPosterior({
+          pi, Q, omega, covMatrix, tau: factorConfig?.tau ?? 0.03,
+        });
+      }
+    }
+    viewCells += n;
+    viewCovered += stepViews;
+
+    contexts.push({ ...step, muEq });
+  }
+  // Coverage is reported, never assumed: a run must not read as "analyst-driven" when the
+  // archive only reached a fraction of its ticker-steps.
+  const viewCoverage = { mode: viewMode, cells: viewCells, covered: viewCovered,
+    coverage: viewCells ? viewCovered / viewCells : 0 };
+  return { contexts, viewCoverage };
+}
+
+/**
+ * Build per-step context (Σ, μ, realized returns, ADV) once for a rebalance grid.
+ * Thin composition of the two halves above; pass `ctx.riskContexts` to reuse a prior build.
+ */
+function buildStepContexts(grid, ctx) {
+  const built = ctx.riskContexts
+    ? { risk: ctx.riskContexts, lookAhead: ctx.riskLookAhead ?? null }
+    : buildRiskContexts(grid, ctx);
+  const { contexts, viewCoverage } = attachMu(built.risk, ctx);
+  return { contexts, lookAhead: built.lookAhead, viewCoverage };
 }
 
 /**
@@ -749,10 +1096,39 @@ function walkMinVar(contexts, kappa = 0, constraints = DEFAULT_CONSTRAINTS) {
   const weights = [];
   for (let i = 0; i < contexts.length; i++) {
     const c = contexts[i];
-    const wDrift = kappa > 0 && i > 0 ? driftWeights(weights[i - 1], contexts[i - 1].rVec) : null;
-    weights.push(minVarTurnoverPenalized(c.covMatrix, c.volAssets, wDrift, kappa, constraints));
+    const wDrift = kappa > 0 && i > 0 ? driftOnStepSet(weights[i - 1], contexts[i - 1], c) : null;
+    weights.push(embedStep(minVarTurnoverPenalized(c.covMatrix, c.volAssets, wDrift, kappa, constraints), c));
   }
   return weights;
+}
+
+// ── point-in-time membership: weights live on a per-step SUBSET ───────────────
+// A PIT context optimizes over only the names in the index (and eligible) at that step, so
+// covMatrix / volAssets / muEq are subset-sized, while everything downstream — drift, cost,
+// turnover — works on FULL-universe vectors (rVec / advVec are full-length, zero for names
+// that are out). These two helpers are the only bridge between the two. Contexts without an
+// `idx` (fixed universe) pass through untouched.
+
+/** Subset-sized weights → full-universe vector, zero for every name outside the step. */
+function embedStep(wSub, c) {
+  if (!c.idx) return wSub;
+  const out = new Array(c.rVec.length).fill(0);
+  c.idx.forEach((i, k) => { out[i] = wSub[k]; });
+  return out;
+}
+
+/**
+ * Last step's FULL weights, drifted by that step's realized returns, then restricted to the
+ * names this step may hold and renormalized — the "where am I now" vector the turnover
+ * penalty pulls toward. A name that fell out of the index simply drops out of it; the cost
+ * of selling it is charged separately, on the full vectors, by buildCostedSeries.
+ */
+function driftOnStepSet(wPrevFull, cPrev, c) {
+  const drifted = driftWeights(wPrevFull, cPrev.rVec);
+  if (!c.idx) return drifted;
+  const sub = c.idx.map(i => drifted[i]);
+  const s = sub.reduce((a, v) => a + v, 0);
+  return s > 1e-12 ? sub.map(v => v / s) : null;
 }
 
 /**
@@ -847,7 +1223,7 @@ function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIte
   for (let i = 0; i < contexts.length; i++) {
     const c = contexts[i];
     const scenarios = Array.from({ length: paths }, () => c.muEq); // empirical = equilibrium-centered
-    const currentWeights = kappa > 0 && i > 0 ? driftWeights(weights[i - 1], contexts[i - 1].rVec) : null;
+    const currentWeights = kappa > 0 && i > 0 ? driftOnStepSet(weights[i - 1], contexts[i - 1], c) : null;
     const rng = seed != null ? makeRng((seed + i) >>> 0) : Math.random;
     const { weights: w } = optimizeTailAware(scenarios, c.covMatrix, c.volAssets, {
       // Step's own r_f (set by buildStepContexts); falls back to the flat rate.
@@ -855,7 +1231,7 @@ function walkVariant(contexts, { mode, tailPenalty, kappa, paths, optimizeMaxIte
       robustMode: mode, tailPenalty, turnoverPenalty: kappa, currentWeights,
       deterministicStarts: true, optimizeMaxIter, rng,
     });
-    weights.push(w);
+    weights.push(embedStep(w, c));
   }
   return weights;
 }
@@ -960,6 +1336,101 @@ function prepareStrategyInputs(data, includedTickers, volHalfLife, windowStart =
 }
 
 /**
+ * Every name in the history file that was an index member at any point from `windowStart`
+ * on — the FULL universe of a point-in-time run. Per-step membership then decides who is
+ * actually tradable when. Exported so a sweep can print and fingerprint it.
+ */
+export function pitUniverse(data, membership, windowStart = DEFAULT_WINDOW_START) {
+  const known = new Set(data.tickers.map(t => t.ticker));
+  // The snapshot in force AT windowStart is dated on or before it — reach back a little
+  // further than a month so that first snapshot is always included.
+  const from = windowStart ? addCalendarDays(windowStart, -35) : (membership.dates?.[0] ?? '0000-00-00');
+  const out = new Set();
+  for (const snap of membership.snapshots ?? []) {
+    if (snap.date < from) continue;
+    for (const m of snap.members) if (known.has(m.ticker)) out.add(m.ticker);
+  }
+  return [...out];
+}
+
+/**
+ * prepareStrategyInputs' point-in-time sibling. Same return shape, so runStrategyBacktest
+ * needs no second code path for the walk itself — only for what the universe IS at a step.
+ *
+ * The difference that matters: the fixed-universe path INNER-JOINS every name's weekly
+ * history to build the rebalance calendar, which caps the walk at the newest listing. A
+ * point-in-time universe is by construction full of late listings and early exits, so the
+ * calendar comes from the IHSG bars instead and every row carries whichever prices exist.
+ * Who is tradable at a row is then decided per step by buildRiskContextsPIT.
+ */
+function preparePITInputs(data, membership, volHalfLife, windowStart = DEFAULT_WINDOW_START) {
+  const rf = data.riskFreeRate ?? BI_RATE_FALLBACK;
+  const rfAt = makeRateLookup(data.riskFreeRateSeries, rf);
+  const warnings = [];
+  const byTicker = new Map(data.tickers.map(t => [t.ticker, t]));
+  const universe = pitUniverse(data, membership, windowStart);
+  const included = universe.map(t => byTicker.get(t));
+  if (included.length < 2) return { ok: false, warnings: ['Membership archive yields fewer than 2 priced names.'] };
+
+  const dailyRet = included.map(a => dailyLogReturns(a.daily));
+  const dailyDV = included.map(a => ({ dates: a.daily.dates, dv: a.daily.dollarVol ?? null }));
+  const hasLiquidity = dailyDV.every(x => Array.isArray(x.dv) && x.dv.length === x.dates.length);
+  if (!hasLiquidity) warnings.push('No dollar-volume for some names — using flat per-side transaction cost.');
+  const sharesOut = included.map(a => (Number.isFinite(a.sharesOut) && a.sharesOut > 0 ? a.sharesOut : 0));
+
+  // Canonical weekly price per name (latest source bar wins — same rule as alignPriceSeries).
+  const px = included.map(a => {
+    const m = new Map();
+    const src = new Map();
+    const ds = a.weekly?.dates ?? [], ps = a.weekly?.adjClose ?? [];
+    for (let i = 0; i < ds.length; i++) {
+      if (ps[i] == null) continue;
+      const key = canonicalWeeklyKey(ds[i]);
+      if (!src.has(key) || ds[i] > src.get(key)) { src.set(key, ds[i]); m.set(key, ps[i]); }
+    }
+    return m;
+  });
+
+  const benchByKey = new Map();
+  data.benchmark.weekly.dates.forEach((d, i) => {
+    const p = data.benchmark.weekly.adjClose[i];
+    if (p != null) benchByKey.set(canonicalWeeklyKey(d), p);
+  });
+
+  const firstSnap = membership.dates?.[0];
+  const floor = windowStart ?? (firstSnap ? addCalendarDays(firstSnap, CORR_WINDOW_DAYS) : '0000-00-00');
+  const calendar = [...benchByKey.keys()].sort().filter(d => d >= floor);
+  let rows = calendar.map(date => {
+    const row = { date };
+    included.forEach((a, k) => { const v = px[k].get(date); if (v != null) row[a.ticker] = v; });
+    return row;
+  });
+  // Trim a ragged tail: a final bar the vendor has only partly published would score most
+  // of the book at a zero return.
+  const snapEnd = snapshotAsOf(membership, rows[rows.length - 1]?.date ?? '9999');
+  const nowMembers = new Set((snapEnd?.members ?? []).map(m => m.ticker));
+  const memberPriced = row => [...nowMembers].reduce((c, t) => c + (row[t] > 0 ? 1 : 0), 0);
+  while (rows.length && nowMembers.size && memberPriced(rows[rows.length - 1]) < 0.9 * nowMembers.size) rows.pop();
+  if (rows.length < 12) {
+    return { ok: false, warnings: [`Only ${rows.length} weekly bars from ${floor} — window too short for a strategy backtest.`] };
+  }
+
+  const firstStep = rows[0].date;
+  const oldestDecision = rfAt.history[0]?.effective;
+  if (rfAt.mode === 'series' && oldestDecision && oldestDecision > firstStep) {
+    warnings.push(`r_f series starts ${oldestDecision}; steps from ${firstStep} use the oldest known rate (${(rfAt.history[0].rate * 100).toFixed(2)}%).`);
+  } else if (rfAt.mode === 'constant') {
+    warnings.push(`r_f is a single constant ${(rf * 100).toFixed(2)}% across the whole window (no dated series available).`);
+  }
+
+  const corrAssets = included.map(a => ({ ticker: a.ticker, priceHistory: a.weekly }));
+  const sharedCtx = { corrAssets, dailyRet, dailyDV, included, hasLiquidity, volHalfLife, benchByKey,
+    sharesOut, capMode: 'cap', rf, rfAt, pit: { membership } };
+  return { ok: true, rf, rfAt, warnings, included, hasLiquidity, capMode: 'cap', rebalanceRows: rows,
+    newestListing: null, windowStart: windowStart ?? null, boundBy: 'membership', sharedCtx };
+}
+
+/**
  * Costed, statistically-reported walk-forward of the tail-aware machinery vs
  * min-variance / equal-weight / IHSG, with a turnover-penalty (κ) sweep and a
  * rebalance-frequency comparison.
@@ -979,16 +1450,74 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     optimizeMaxIter = 100,          // hill-climb iterations; lower = faster precompute
     volHalfLife = DEFAULT_VOL_HALF_LIFE,
     seed = 12345,                   // fixed RNG seed ⇒ byte-reproducible + common random numbers
-    priorMode = 'cap',              // BL-equilibrium prior weights: 'cap' | 'shrunk' | 'equal'
+    priorMode = 'cap',              // ANCHOR: BL-equilibrium prior weights 'cap' | 'shrunk' |
+                                    // 'equal', or 'none' = no prior at all
+    viewMode = 'off',               // SIGNAL: 'off' | 'analyst' | 'hybrid' | 'sample' (VIEW_MODES)
+    views = null,                   // parsed analyst-views.json; required by 'analyst'/'hybrid'
+    factorConfig = null,            // BL knobs: { tau, omegaScale, analystConfidence, dispersionOmega }
+    maxStalenessDays = DEFAULT_MAX_STALENESS_DAYS, // older target ⇒ treated as no view
     windowStart = DEFAULT_WINDOW_START, // earliest walk-forward step; null ⇒ listing-bound only
+    membership = null,              // parsed index-members.json ⇒ POINT-IN-TIME universe: each step
+                                    // optimizes only over names in the index (and eligible) at t,
+                                    // with dated shares for the cap prior. `includedTickers` is
+                                    // ignored — the universe is derived from the archive
+                                    // (see pitUniverse). null ⇒ the fixed-universe walk.
+    riskCache = null,               // optional Map(freqKey → {risk, lookAhead}) shared ACROSS runs.
+                                    // Σ construction is ~34 ms/step vs ~4-5 ms for one optimizer
+                                    // walk, so a config sweep that rebuilt it per config would burn
+                                    // roughly half its time on an identical matrix. ONLY valid while
+                                    // (universe, volHalfLife, windowStart, data) are held fixed —
+                                    // the caller owns the Map and must drop it when any of those move.
   } = opts;
 
-  const prep = prepareStrategyInputs(data, includedTickers, volHalfLife, windowStart);
+  // One lookup bound for the whole run — pure, and shared across every frequency.
+  const viewLookup = views ? makeViewLookup(views, { maxStalenessDays }) : null;
+  const stepOpts = { priorMode, viewMode, viewLookup, factorConfig };
+
+  const prep = membership
+    ? preparePITInputs(data, membership, volHalfLife, windowStart)
+    : prepareStrategyInputs(data, includedTickers, volHalfLife, windowStart);
   if (!prep.ok) return { ok: false, warnings: prep.warnings };
   const { rf, rfAt, warnings, included, hasLiquidity, capMode, rebalanceRows, newestListing, windowStart: appliedWindowStart, boundBy, sharedCtx } = prep;
+  let pitStats = null;
+
+  // ── Ω-input provenance guard ────────────────────────────────────────────────
+  // Q needs only (target, price) — both fully dated. Ω does NOT: its coverage and
+  // dispersion terms read analyst COUNT and target SPREAD, which the vendor target export
+  // does not carry. Those come from the weekly capture archive, which only begins in 2026,
+  // so before its first row Ω is extrapolated from a CONSTANT present-day value at every
+  // historical step. That is 2026 information entering a 2018 Ω.
+  //
+  // It cannot leak returns directly, but it is not neutral either: a name that attracted
+  // more analysts BECAUSE it did well gets a tighter ω — more trust in its view — across
+  // the entire backtest. Measured on the reference universe, switching the coverage term
+  // off (analystConfidence: 0) LOWERS full-window Sharpe but RAISES the held-out test
+  // slice at both quarterly and monthly, which is the signature of exactly that tilt.
+  //
+  // Only warn when the term is actually switched on and the archive genuinely cannot cover
+  // the window — a fully-covered future run should stay silent.
+  if (viewMode !== 'off' && priorMode !== 'none' && views) {
+    const conf = factorConfig?.analystConfidence ?? 0.7;
+    const disp = factorConfig?.dispersionOmega ?? 0.8;
+    if (conf > 0 || disp > 0) {
+      let earliestEnrich = null;
+      for (const rec of Object.values(views.tickers ?? {})) {
+        const d = rec.enrich?.[0]?.d;
+        if (d && (!earliestEnrich || d < earliestEnrich)) earliestEnrich = d;
+      }
+      const firstStep = rebalanceRows[0]?.date;
+      if (firstStep && (!earliestEnrich || earliestEnrich > firstStep)) {
+        warnings.push(
+          `Ω provenance: analyst coverage/dispersion are constant-extrapolated from ${earliestEnrich ?? 'the present snapshot'} `
+          + `back to ${firstStep} — present-day values applied at historical steps. Q itself is fully dated and unaffected. `
+          + `Set analystConfidence:0 (and dispersionOmega:0) to remove the extrapolated terms from Ω.`);
+      }
+    }
+  }
 
   const byFrequency = {};
   let lookAheadAny = null;
+  const viewCoverageByFreq = {};
   const round2 = arr => arr.map(v => +v.toFixed(2));
 
   for (const freqKey of frequencies) {
@@ -998,8 +1527,17 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     if (grid.length < 6) { warnings.push(`${freqKey}: too few rebalances (${grid.length}).`); continue; }
     const ppy = freq.periodsPerYear;
 
-    const { contexts, lookAhead } = buildStepContexts(grid, { ...sharedCtx, priorMode });
+    let cachedRisk = riskCache?.get(freqKey) ?? null;
+    if (!cachedRisk) {
+      cachedRisk = buildRiskContexts(grid, sharedCtx);
+      riskCache?.set(freqKey, cachedRisk);
+    }
+    if (cachedRisk.pitStats) (pitStats ??= {})[freqKey] = cachedRisk.pitStats;
+    const { contexts, lookAhead, viewCoverage } = buildStepContexts(grid, {
+      ...sharedCtx, ...stepOpts, riskContexts: cachedRisk.risk, riskLookAhead: cachedRisk.lookAhead,
+    });
     if (lookAhead && !lookAheadAny) lookAheadAny = lookAhead;
+    if (viewCoverage) viewCoverageByFreq[freqKey] = viewCoverage;
     const benchRets = contexts.map(c => c.ihsgRet);
     const dates = [...contexts.map(c => c.t), grid[grid.length - 1].date];
 
@@ -1010,9 +1548,16 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
 
     // Baselines on this grid.
     const mvW = walkMinVar(contexts);
-    const ewW = contexts.map(() => Array(included.length).fill(1 / included.length));
+    // Equal-weight over whoever is tradable at the step (the whole fixed universe otherwise).
+    const ewW = contexts.map(c => (c.idx
+      ? embedStep(Array(c.idx.length).fill(1 / c.idx.length), c)
+      : Array(included.length).fill(1 / included.length)));
     const costMV = costStrategy(mvW, contexts, hasLiquidity, rfPeriod, benchRets, ppy);
     const costEW = costStrategy(ewW, contexts, hasLiquidity, rfPeriod, benchRets, ppy);
+    // Point-in-time only: the index's own dated weights — the fair "just buy LQ45" yardstick.
+    const costIW = contexts[0]?.indexW
+      ? costStrategy(contexts.map(c => c.indexW), contexts, hasLiquidity, rfPeriod, benchRets, ppy)
+      : null;
     const ihEq = cumEquity(benchRets);
     const ihMetrics = seriesMetrics(benchRets, ihEq[ihEq.length - 1], rfPeriod, null, ppy);
 
@@ -1030,6 +1575,10 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     curves.IHSG = { eq: round2(ihEq) };
     metrics.MinVar = packNet(costMV);
     metrics.EqualWeight = packNet(costEW);
+    if (costIW) {
+      curves.IndexWeight = { grossEq: round2(costIW.grossEq), netEq: round2(costIW.netEq) };
+      metrics.IndexWeight = packNet(costIW);
+    }
     metrics.IHSG = { ...ihMetrics, grossSharpe: ihMetrics.sharpe, grossAnnReturn: ihMetrics.annReturn, annualTurnover: 0, annualCostDrag: 0 };
 
     // κ-sweep at the reference variant λ (tailPenalty) — run for EVERY frequency.
@@ -1062,6 +1611,22 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
       lambdas: variants.filter(v => v.mode === 'tailAware').map(v => v.tailPenalty),
       kappa, kappaSweep, frequencies, paths, tailPenalty,
       seed, priorMode, capMode, costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
+      viewMode,
+      ...(membership ? { membership: {
+        index: membership.index ?? null, generated: membership.generated ?? null,
+        universeSize: included.length, pitStats,
+      } } : {}),
+      ...(viewMode === 'off' ? {} : {
+        maxStalenessDays,
+        factorConfig: {
+          tau: factorConfig?.tau ?? 0.03,
+          omegaScale: factorConfig?.omegaScale ?? 0.05,
+          analystConfidence: factorConfig?.analystConfidence ?? 0.7,
+          dispersionOmega: factorConfig?.dispersionOmega ?? 0.8,
+        },
+        viewCoverage: viewCoverageByFreq,
+        viewArchive: views ? { generated: views.generated, start: views.coverage?.start, end: views.coverage?.end } : null,
+      }),
     },
     window: {
       start: rebalanceRows[0]?.date, end: rebalanceRows[rebalanceRows.length - 1]?.date,
@@ -1071,9 +1636,19 @@ export function runStrategyBacktest(data, includedTickers, opts = {}) {
     byFrequency,
     headline,
     limitations: [
-      'Machinery-only: the analyst-target alpha signal is absent (not historicizable). It is validated by the live forward-test, not this backtest.',
-      'Survivorship bias: the universe is the currently-liquid IDX large-caps; delisted/shrunken names are excluded.',
-      'Cap-weight approximation: the equilibrium prior uses current shares-outstanding (Yahoo exposes no history) × point-in-time price.',
+      ...(viewMode === 'off'
+        ? ['Machinery-only: no alpha signal. μ is the equilibrium prior, so Max-Sharpe reduces to the prior weights by construction (w ∝ Σ⁻¹δΣw_prior). Set viewMode to introduce a signal.']
+        : [
+          `View-driven (viewMode '${viewMode}'): μ carries the point-in-time analyst consensus where the archive covers a name, `
+          + `${viewMode === 'analyst' ? 'and leaves the rest at the equilibrium prior' : 'and the trailing 1-year sample mean elsewhere'}.`,
+          'Analyst-view coverage is NOT uniform across names or time — see params.viewCoverage and the archive\'s coverage.perTicker before reading any spread as alpha.',
+          'Dividend yield inside the total-return view Q is static per ticker (no dated yield history), so Q\'s LEVEL is approximate; its cross-sectional ranking is not affected.',
+        ]),
+      ...(membership
+        ? ['Point-in-time universe: each step holds only names that were in the index on that date (monthly snapshots, so a quarterly review can lag by up to ~4 weeks) AND had a full 365-day price window; a name IPO\'d into the index waits a year. Names whose price bars stop are treated as untradable from that bar — no forced loss is charged for a suspension.',
+           'Cap prior uses the index archive\'s DATED shares-outstanding × price(t), not today\'s share count.']
+        : ['Survivorship bias: the universe is the currently-liquid IDX large-caps; delisted/shrunken names are excluded.',
+           'Cap-weight approximation: the equilibrium prior uses current shares-outstanding (Yahoo exposes no history) × point-in-time price.']),
       'Return scenarios are equilibrium-centered with the trailing Σ; they are not the production PERT-from-targets distribution.',
     ],
     warnings,
@@ -1110,7 +1685,12 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
     volHalfLife = DEFAULT_VOL_HALF_LIFE,
     onProgress = null,              // (done, total, label) — forwarded by the worker
     maxPositionCap = 1,             // per-name weight cap (1 = off); reins in every strategy
-    priorMode = 'cap',             // BL prior reference weights: 'cap' | 'shrunk' | 'equal'
+    priorMode = 'cap',             // ANCHOR: BL prior reference weights 'cap' | 'shrunk' |
+                                   // 'equal', or 'none' = no prior at all
+    viewMode = 'off',              // SIGNAL: 'off' | 'analyst' | 'hybrid' | 'sample' (VIEW_MODES)
+    views = null,                  // parsed analyst-views.json; required by 'analyst'/'hybrid'
+    factorConfig = null,           // BL knobs: { tau, omegaScale, analystConfidence, dispersionOmega }
+    maxStalenessDays = DEFAULT_MAX_STALENESS_DAYS, // older target ⇒ treated as no view
     sectorCap = null,              // per-sector weight cap (null/≥1 = off); needs SECTOR_MAP
     seed = 12345,                  // fixed RNG seed ⇒ identical settings give identical curves
                                    // (no Monte-Carlo jitter on recompute); pass null for live noise
@@ -1150,8 +1730,14 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
     }
   }
 
-  const { contexts, lookAhead } = buildStepContexts(grid, { ...sharedCtx, priorMode });
+  const viewLookup = views ? makeViewLookup(views, { maxStalenessDays }) : null;
+  const { contexts, lookAhead, viewCoverage } = buildStepContexts(grid, {
+    ...sharedCtx, priorMode, viewMode, viewLookup, factorConfig,
+  });
   if (lookAhead) warnings.push(`Look-ahead guard tripped: ${lookAhead}`);
+  if (viewMode !== 'off' && viewCoverage && viewCoverage.coverage < 1) {
+    warnings.push(`Analyst views cover ${(viewCoverage.coverage * 100).toFixed(1)}% of ticker-steps; the rest fell back to ${viewMode === 'analyst' ? 'the equilibrium prior' : 'the trailing sample mean'}.`);
+  }
   const benchRets = contexts.map(c => c.ihsgRet);
   const dates = [...contexts.map(c => c.t), grid[grid.length - 1].date];
   const round2 = arr => arr.map(v => +v.toFixed(2));
@@ -1206,7 +1792,9 @@ export function runLiveStrategy(data, includedTickers, opts = {}) {
   return {
     ok: true,
     frequency,
-    params: { lambda, kappa, maxPositionCap, priorMode, sectorCap, paths, optimizeMaxIter, capMode, costModel: hasLiquidity ? 'liquidity-aware' : 'flat' },
+    params: { lambda, kappa, maxPositionCap, priorMode, viewMode, sectorCap, paths, optimizeMaxIter, capMode,
+      costModel: hasLiquidity ? 'liquidity-aware' : 'flat',
+      ...(viewMode === 'off' ? {} : { maxStalenessDays, viewCoverage }) },
     window: {
       start: dates[0], end: dates[dates.length - 1], newestListing,
       nRebalances: grid.length, nTickers: n,
