@@ -12,9 +12,14 @@
  *   • FETCHED (standalone) — no init arrives, so the worker loads the static
  *     /backtest-history.json itself and caches it for its lifetime, as before.
  *
- * Protocol (main → worker):  { type:'init', history, dataVersion }
+ * The analyst-view archive follows the same two paths, but is loaded LAZILY: it is ~1.3 MB
+ * and only a run with viewMode != 'off' needs it, so a session that never leaves Views=None
+ * never fetches it.
+ *
+ * Protocol (main → worker):  { type:'init', history, dataVersion, views? }
  *                            { id, dataVersion?, included, frequency, lambda, kappa,
- *                              maxPositionCap, priorMode, sectorCap, paths, optimizeMaxIter }
+ *                              maxPositionCap, priorMode, viewMode, tau, sectorCap,
+ *                              paths, optimizeMaxIter }
  * Protocol (worker → main):  { id, type: 'progress', done, total, label }
  *                            { id, type: 'result', result }
  *                            { id, type: 'error', message }
@@ -23,8 +28,9 @@
  */
 import { runLiveStrategy } from './backtestEngine.js';
 
-let injected = null;       // { history, dataVersion } from the shell (workbench)
+let injected = null;       // { history, dataVersion, views } from the shell (workbench)
 let historyPromise = null; // standalone fetch, memoised
+let viewsPromise = null;   // standalone analyst-archive fetch, memoised (lazy)
 
 /**
  * Price history plus the CURRENT BI-Rate archive.
@@ -62,6 +68,42 @@ function loadHistory() {
 }
 
 /**
+ * The analyst-target archive, fetched on FIRST USE and cached for the worker's lifetime.
+ *
+ * Injected wins (the workbench shell owns its own copy). Standalone falls back to
+ * /analyst-views.json, served live by the dev server from portfolio-app/data/ — see
+ * vite.config.js. A missing archive is a HARD error rather than a silent 'off': a run
+ * labelled "Analyst" that quietly carried no views would be indistinguishable in the UI
+ * from one that did, which is exactly the kind of result that gets believed.
+ */
+function loadViews() {
+  if (injected?.views) return Promise.resolve(injected.views);
+  if (!viewsPromise) {
+    viewsPromise = fetch('/analyst-views.json').then(r => {
+      if (!r.ok) {
+        throw new Error(`Analyst archive unavailable (HTTP ${r.status}) — run `
+          + '`npm run import-analyst-views` in portfolio-app, or set Views to None.');
+      }
+      // A deployment without the archive answers the SPA rewrite with index.html, so a
+      // parse failure here means "not exposed", not "corrupt".
+      return r.json().catch(() => {
+        throw new Error('Analyst archive response was not JSON — this deployment does not '
+          + 'expose one. Set Views to None, or open the BACKTEST tab so the shell can inject it.');
+      });
+    }).then(v => {
+      if (!v?.tickers || v.error) {
+        throw new Error('Analyst archive is empty or malformed — re-run `npm run import-analyst-views`.');
+      }
+      return v;
+    }).catch(err => {
+      viewsPromise = null;          // let a later run retry rather than caching the failure
+      throw err;
+    });
+  }
+  return viewsPromise;
+}
+
+/**
  * Resolves the history a job should run against. A job tagged with a `dataVersion`
  * that doesn't match what we hold is a race — the shell primes before every run, so
  * this only happens if an init were dropped; failing loudly beats silently backtesting
@@ -82,12 +124,12 @@ self.onmessage = async (e) => {
   const msg = e.data || {};
 
   if (msg.type === 'init') {
-    injected = { history: msg.history, dataVersion: msg.dataVersion };
+    injected = { history: msg.history, dataVersion: msg.dataVersion, views: msg.views ?? null };
     return;
   }
 
   const { id, dataVersion, included, frequency, lambda, kappa, maxPositionCap,
-          priorMode, sectorCap, paths, optimizeMaxIter } = msg;
+          priorMode, viewMode = 'off', tau = null, sectorCap, paths, optimizeMaxIter } = msg;
   try {
     // Emit progress for the slow pre-optimization phases (worker module compile on first load,
     // ~3MB history fetch/parse, then per-rebalance covariance build) so the UI doesn't look frozen
@@ -95,11 +137,22 @@ self.onmessage = async (e) => {
     const post = (label) => self.postMessage({ id, type: 'progress', done: 0, total: 4, label });
     post('Loading history…');
     const data = await historyFor(dataVersion);
+    // 'sample' derives its views from the price history itself, so only the archive-backed
+    // modes need the download.
+    const views = (viewMode === 'analyst' || viewMode === 'hybrid')
+      ? await (post('Loading analyst archive…'), loadViews())
+      : null;
     post('Building covariances…');
     const onProgress = (done, total, label) =>
       self.postMessage({ id, type: 'progress', done, total, label });
     const result = runLiveStrategy(data, included, {
-      frequency, lambda, kappa, maxPositionCap, priorMode, sectorCap, paths, optimizeMaxIter, onProgress,
+      frequency, lambda, kappa, maxPositionCap, priorMode, sectorCap, paths, optimizeMaxIter,
+      viewMode, views,
+      // tau only bites when a prior AND views both exist; passing it otherwise would label
+      // identical runs with different configs.
+      ...(tau != null && viewMode !== 'off' && priorMode !== 'none'
+        ? { factorConfig: { tau } } : {}),
+      onProgress,
     });
     self.postMessage({ id, type: 'result', result });
   } catch (err) {

@@ -12,7 +12,9 @@ description: Add or remove an IDX ticker in portfolio-app/data/universe.js — e
 | `UNIVERSE_JK` | Optimizer app (`portfolio-app`), backtester (`backtest-portfolio`) | Cheap. Research only. **Cannot** affect the live forward test. |
 | `FORWARD_TEST_UNIVERSE_JK` | The 300 live forward-test streams (`optimize.mjs` + the dashboard's lean snapshot) | **Starts a new experiment.** Read part B first. |
 
-Both use the Yahoo `.JK` suffix, e.g. `'GOTO.JK'`. Currently 25 tickers each, `BBCA.JK … ISAT.JK`.
+Both use the Yahoo `.JK` suffix, e.g. `'GOTO.JK'`. `UNIVERSE_JK` is currently 36 names (`WIFI.JK … LSIP.JK`, the live holdings book); `FORWARD_TEST_UNIVERSE_JK` is the frozen 25 (`BBCA.JK … ISAT.JK`).
+
+The analyst archive's `tier: "core"` label keys off a third list, `CORE_TIER_JK` (the original 25), **not** `UNIVERSE_JK` — so editing the research list never relabels `analyst-views.json` or trips `validate-analyst-views.mjs`.
 
 ---
 

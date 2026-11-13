@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * generate-reference-artifacts.mjs — kill-proof sharded driver for the 3-prior
+ * generate-reference-artifacts.mjs — kill-proof sharded driver for the 4-prior
  * reference backtest.
  * ─────────────────────────────────────────────────────────────────────────────
  * Runs each (prior × frequency) shard as its own child `node` process so memory
@@ -30,7 +30,7 @@ const APP_ROOT   = join(__dirname, '..');
 const publicDir  = join(APP_ROOT, 'public');
 if (!existsSync(publicDir)) mkdirSync(publicDir, { recursive: true });
 
-const PRIORS  = ['cap', 'shrunk', 'equal'];
+const PRIORS  = ['cap', 'shrunk', 'equal', 'none']; // 'none' = no BL prior (sample-mean μ)
 const FREQS   = ['quarterly', 'monthly', 'weekly']; // fast → slow
 const SEED    = process.env.SEED    || '12345';
 const PATHS   = process.env.PATHS   || '400';

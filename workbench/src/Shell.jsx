@@ -13,9 +13,11 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import OptimizerApp from '../../portfolio-app/src/App.jsx';
 import BacktestApp from '../../backtest-portfolio/src/App.jsx';
+import { DEFAULT_WINDOW_START } from '../../backtest-portfolio/src/backtestEngine.js';
+import { loadViews } from './universe/marketDataClient.js';
 import UniversePanel from './universe/UniversePanel.jsx';
 import { useUniverse } from './universe/UniverseContext.jsx';
 
@@ -65,6 +67,30 @@ export default function Shell() {
   const { status, progress, error, snapshot, history, version, asOf, symbols, isStale, isDefault } = useUniverse();
 
   const ready = status === 'ready' && snapshot && history;
+
+  // The analyst archive, fetched ONCE the backtest tab is actually opened.
+  //
+  // Lazy on purpose: it is the biggest per-name payload here and an optimizer-only session
+  // never needs it. Fetching on tab-open rather than on view-mode-select means it is already
+  // in hand by the time someone flips Views, without ever loading it for a visitor who does
+  // not go near the backtester.
+  //
+  // Clipped server-side to a year before DEFAULT_WINDOW_START. The walk can never begin
+  // earlier than that floor, and /api/views keeps one row before the cut so an as-of lookup
+  // at the very first step still resolves.
+  const [views, setViews] = useState(null);
+  const viewsKeyRef = useRef(null);
+  useEffect(() => {
+    if (tab !== 'BACKTEST' || !ready || !symbols?.length) return;
+    if (viewsKeyRef.current === version) return;     // already have it for this universe
+    viewsKeyRef.current = version;
+    const ac = new AbortController();
+    const from = `${Number(DEFAULT_WINDOW_START.slice(0, 4)) - 1}${DEFAULT_WINDOW_START.slice(4)}`;
+    loadViews(symbols, { from, signal: ac.signal }).then(v => {
+      if (!ac.signal.aborted) setViews(v);
+    });
+    return () => ac.abort();
+  }, [tab, ready, symbols, version]);
 
   return (
     <div style={s.root}>
@@ -126,7 +152,7 @@ export default function Shell() {
             <OptimizerApp snapshot={snapshot} chrome={false} />
           </div>
           <div style={{ display: tab === 'BACKTEST' ? 'block' : 'none' }}>
-            <BacktestApp history={history} dataVersion={version} isDefaultUniverse={isDefault} />
+            <BacktestApp history={history} dataVersion={version} views={views} isDefaultUniverse={isDefault} />
           </div>
           <div style={{ display: tab === 'UNIVERSE' ? 'block' : 'none', padding: 20 }}>
             <UniversePanel />
