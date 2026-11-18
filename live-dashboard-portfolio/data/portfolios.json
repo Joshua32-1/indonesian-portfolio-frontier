@@ -2,7 +2,7 @@
   "_comment": "Forward-test methodology matrix × κ. config = pert (legacy PERT) + BL × prior{cap,shrunk,equal} × τ{0.01,0.03,0.10}; variant = 6 strategies; κ = turnover penalty {0,0.1,0.25,0.5,0.75}; id = `<base>@<configTag>` (κ=0) or `<base>@<configTag>-k<KK>` (κ>0). Frequency (weekly/monthly/quarterly) and gross/net are DERIVED in the dashboard. κ>0 rows are SYNTHESIZED by merge-rebalances.mjs (post-hoc blend toward drift), not hand-authored. Append dated rebalance rows per stream; never overwrite. Regenerate this skeleton with scripts/init-portfolios-matrix.mjs.",
   "inception": "2026-06-30",
   "updated": "2026-11-15",
-  "riskFreeRate": 0.0575,
+  "riskFreeRate": 0.06,
   "portfolios": [
     {
       "id": "max-sharpe@pert",
@@ -171548,8 +171548,12 @@
       ]
     }
   ],
-  "riskFreeRateEffective": "2026-10-21",
+  "riskFreeRateEffective": "2026-11-18",
   "riskFreeRateSeries": [
+    {
+      "effective": "2026-11-18",
+      "rate": 0.06
+    },
     {
       "effective": "2026-10-21",
       "rate": 0.0575
