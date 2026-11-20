@@ -5,7 +5,8 @@
  *
  * Two optimisation modes:
  *   'tailAware'   — Sharpe(avg μ) − λ · (tailGap / σ_ref) − κ · turnover
- *   'avgMuSharpe' — legacy: Sharpe on average scenario returns (no tail penalty)
+ *   'avgMuSharpe' — legacy: Sharpe on average scenario returns (no tail penalty;
+ *                   the turnover penalty κ DOES apply — see buildRobustObjective)
  *
  * Anti-overfit design:
  *   • Optimizer uses a fixed subsample of scenarios (default 1 000 paths).
@@ -194,10 +195,23 @@ export function buildObjectiveFn({
   turnoverPenalty = 0,
   realizationShocks = null,
 }) {
+  // κ is an OBJECTIVE-level cost, so it has to apply to BOTH modes. It previously lived only
+  // in the tailAware branch below, which left κ silently INERT for 'avgMuSharpe': a
+  // Max-Sharpe run accepted a turnover penalty, echoed it back in its params, and then
+  // optimized as though it were zero. Hoisted here so the two branches share one definition
+  // and cannot drift apart again.
+  //
+  // Null when κ = 0 or there is no incumbent book — the default — so both closures stay
+  // byte-identical to their pre-fix form whenever the penalty is off.
+  const turnoverCost = (turnoverPenalty > 0 && currentWeights)
+    ? (w) => turnoverPenalty * computeTurnover(w, currentWeights)
+    : null;
+
   if (mode === 'avgMuSharpe') {
     return (w) => {
       const risk = Math.sqrt(portfolioVariance(w, covMatrix));
-      return sharpeRatio(portfolioReturn(w, avgMeans), risk, riskFreeRate);
+      const baseSharpe = sharpeRatio(portfolioReturn(w, avgMeans), risk, riskFreeRate);
+      return turnoverCost ? baseSharpe - turnoverCost(w) : baseSharpe;
     };
   }
 
@@ -215,10 +229,7 @@ export function buildObjectiveFn({
       penalty += tailPenalty * (tailGap / sigmaRef);
     }
 
-    if (turnoverPenalty > 0 && currentWeights) {
-      const oneWayTurnover = w.reduce((s, wi, i) => s + Math.abs(wi - (currentWeights[i] ?? 0)), 0) / 2;
-      penalty += turnoverPenalty * oneWayTurnover;
-    }
+    if (turnoverCost) penalty += turnoverCost(w);
 
     return baseSharpe - penalty;
   };

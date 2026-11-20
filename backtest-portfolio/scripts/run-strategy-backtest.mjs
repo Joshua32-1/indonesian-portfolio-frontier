@@ -17,7 +17,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { runStrategyBacktest, DEFAULT_WINDOW_START } from '../src/backtestEngine.js';
+import { runStrategyBacktest, DEFAULT_WINDOW_START, PRIOR_MODES, VIEW_MODES } from '../src/backtestEngine.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, '..', 'public');
@@ -98,6 +98,7 @@ function main() {
   //   FREQS=monthly,quarterly PATHS=70 MAXITER=25 npm run backtest
   //   LAMBDAS=0,0.5 KAPPA=0.25 npm run backtest
   //   SEED=12345 PRIOR=shrunk npm run backtest   (fixed seed ⇒ reproducible; per-prior file)
+  //   PRIOR=none npm run backtest                (no BL prior: plain Markowitz on sample μ)
   const num = (env, d) => (process.env[env] ? Number(process.env[env]) : d);
   const list = (env, d) => (process.env[env] ? process.env[env].split(',').map(Number) : d);
   const frequencies = process.env.FREQS ? process.env.FREQS.split(',') : ['weekly', 'monthly', 'quarterly'];
@@ -107,7 +108,47 @@ function main() {
        ...lambdas.map(l => ({ key: `Tail${String(l).replace('.', '')}`, label: `Tail λ=${l}`, mode: 'tailAware', tailPenalty: l }))]
     : undefined; // → engine default (Max-Sharpe + λ 0.25/0.5/1.0)
   const seed = process.env.SEED != null ? Number(process.env.SEED) : 12345; // fixed ⇒ reproducible
-  const priorMode = process.env.PRIOR || 'cap';                              // 'cap' | 'shrunk' | 'equal'
+  // μ source: three BL equilibrium priors, or 'none' = no prior (trailing sample mean μ).
+  // Validated, not defaulted — an unknown value used to run as 'cap' under its own filename.
+  const priorMode = process.env.PRIOR || 'cap';
+  if (!PRIOR_MODES.includes(priorMode)) {
+    console.error(`PRIOR="${priorMode}" is not a valid prior (expected ${PRIOR_MODES.join(' | ')}).`);
+    process.exit(1);
+  }
+
+  // ── μ SIGNAL (orthogonal to PRIOR) ──────────────────────────────────────────
+  // VIEWS=off      no signal — μ is the prior itself. Max-Sharpe then reduces to the
+  //                prior weights identically; this is the historical default.
+  // VIEWS=analyst  point-in-time analyst 12-month targets where the archive covers a name.
+  // VIEWS=hybrid   …and the trailing 1-year sample mean everywhere else, so μ always exists.
+  // VIEWS=sample   trailing sample mean for every name (expressed as a view).
+  const viewMode = process.env.VIEWS || 'off';
+  if (!VIEW_MODES.includes(viewMode)) {
+    console.error(`VIEWS="${viewMode}" is not a valid view mode (expected ${VIEW_MODES.join(' | ')}).`);
+    process.exit(1);
+  }
+  let views = null;
+  if (viewMode === 'analyst' || viewMode === 'hybrid') {
+    const viewsPath = process.env.VIEWS_FILE
+      || join(__dirname, '..', '..', 'portfolio-app', 'data', 'analyst-views.json');
+    try {
+      views = JSON.parse(readFileSync(viewsPath, 'utf8'));
+    } catch (e) {
+      console.error(`❌  VIEWS=${viewMode} needs the analyst-target archive.\n    Missing/unreadable: ${viewsPath}\n    Build it with: node portfolio-app/scripts/import-analyst-views.mjs\n    ${e.message}`);
+      process.exit(1);
+    }
+    const cov = views.coverage ?? {};
+    console.log(`    views: ${cov.tickers ?? '?'} tickers · ${(cov.rows ?? 0).toLocaleString('en-US')} dated targets · ${cov.start} → ${cov.end}`);
+  }
+
+  // BL knobs (only meaningful when a prior anchors the views). Mirrors the optimizer's
+  // factorConfig so a backtest config and a live run can be compared directly.
+  const factorConfig = {
+    tau: num('TAU', 0.03),
+    omegaScale: num('OMEGA_SCALE', 0.05),
+    analystConfidence: num('ANALYST_CONF', 0.7),
+    dispersionOmega: num('DISP_OMEGA', 0.8),
+  };
 
   // RISK_FREE_RATE re-scores at a flat rate without a 3 MB refetch — drops the dated series
   // so every step sees the same r_f (reproducing a pre-series result, or a sensitivity pass).
@@ -120,7 +161,8 @@ function main() {
   }
   const paths = num('PATHS', 100);
 
-  console.log(`    seed=${seed} | paths=${paths} | prior=${priorMode} | freqs=${frequencies.join(',')} | windowStart=${windowStart ?? 'none (full spliced history)'}\n`);
+  const viewBanner = viewMode === 'off' ? 'off' : `${viewMode} (τ=${factorConfig.tau})`;
+  console.log(`    seed=${seed} | paths=${paths} | prior=${priorMode} | views=${viewBanner} | freqs=${frequencies.join(',')} | windowStart=${windowStart ?? 'none (full spliced history)'}\n`);
 
   const t0 = Date.now();
   const result = runStrategyBacktest(data, universe, {
@@ -133,6 +175,10 @@ function main() {
     optimizeMaxIter: num('MAXITER', 35),
     seed,
     priorMode,
+    viewMode,
+    views,
+    factorConfig,
+    ...(process.env.STALE_DAYS ? { maxStalenessDays: Number(process.env.STALE_DAYS) } : {}),
     windowStart,
   });
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
@@ -144,6 +190,11 @@ function main() {
 
   for (const w of result.warnings) console.log(`  ⚠️  ${w}`);
   console.log(`\n  cost model: ${result.params.costModel} | prior: ${result.params.priorMode} (capMode ${result.params.capMode}) | seed: ${result.params.seed} | fixed κ=${result.params.kappa}`);
+  if (viewMode !== 'off') {
+    const vc = result.params.viewCoverage ?? {};
+    const parts = Object.entries(vc).map(([f, c]) => `${f} ${(c.coverage * 100).toFixed(1)}%`);
+    console.log(`  views: ${viewMode} | τ=${result.params.factorConfig.tau} ωs=${result.params.factorConfig.omegaScale} | analyst-served ticker-steps: ${parts.join(', ') || 'n/a'}`);
+  }
   console.log(`  window: ${result.window.start} → ${result.window.end} (bound by ${result.window.boundBy === 'windowStart' ? `windowStart ${result.window.windowStart}` : `newest listing ${result.window.newestListing} + 1yr`}) | variants: ${result.params.variants.map(v => v.label).join(', ')}`);
   const fmt = m => `S(net)=${m.sharpe.toFixed(2)} S(gr)=${m.grossSharpe.toFixed(2)} IR=${(m.infoRatio ?? 0).toFixed(2)} t=${(m.tStat ?? 0).toFixed(1)} MDD=${(m.maxDrawdown * 100).toFixed(0)}% turn=${m.annualTurnover.toFixed(1)}× drag=${(m.annualCostDrag * 100).toFixed(2)}%`;
   for (const [fk, fb] of Object.entries(result.byFrequency)) {
@@ -167,7 +218,11 @@ function main() {
   // Per-prior filename so cap/shrunk/equal runs don't clobber each other. The cap run keeps
   // the canonical name the UI loads by default; others get a -<prior> suffix. OUTFILE overrides
   // it — used by the sharded generate-reference-artifacts.mjs orchestrator for per-(prior,freq) shards.
-  const outName = process.env.OUTFILE || (priorMode === 'cap' ? 'backtest-results.json' : `backtest-results-${priorMode}.json`);
+  const viewSuffix = viewMode === 'off' ? '' : `-views-${viewMode}`;
+  const outName = process.env.OUTFILE
+    || (priorMode === 'cap' && !viewSuffix
+      ? 'backtest-results.json'
+      : `backtest-results-${priorMode}${viewSuffix}.json`);
   const outPath = join(publicDir, outName);
   writeFileSync(outPath, JSON.stringify(payload));
   console.log(`\n📦  Written → ${outPath}  (${secs}s)\n`);
