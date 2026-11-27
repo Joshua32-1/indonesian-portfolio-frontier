@@ -9,6 +9,10 @@
 # Rebuild:  npm run fetch      → backtest-history.json  (also run by `npm run dev`)
 #           npm run backtest   → backtest-results*.json (or click Regenerate in the UI)
 backtest-history.json
+backtest-history-*.json
 backtest-results.json
 backtest-results-*.json
 .gen-progress.log
+sweep-*.json
+grid-report*.json
+sweep-*.log

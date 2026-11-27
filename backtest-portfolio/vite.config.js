@@ -7,6 +7,7 @@ import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BI_RATE_ARCHIVE = join(__dirname, '..', 'portfolio-app', 'data', 'bi-rate.json');
+const VIEWS_ARCHIVE = join(__dirname, '..', 'portfolio-app', 'data', 'analyst-views.json');
 
 /**
  * Serve the shared BI-Rate archive at /bi-rate.json.
@@ -36,6 +37,39 @@ function biRateArchive() {
     generateBundle() {
       if (!existsSync(BI_RATE_ARCHIVE)) return;
       this.emitFile({ type: 'asset', fileName: 'bi-rate.json', source: readFileSync(BI_RATE_ARCHIVE) });
+    },
+  };
+}
+
+/**
+ * Serve the analyst-target archive at /analyst-views.json.
+ *
+ * Same reasoning as the BI-Rate archive above: it lives in portfolio-app/data/, it is the ONE
+ * file the view-driven mu comes from, and serving it live means a re-import
+ * (`npm run import-analyst-views`) is picked up without a backtest-history refetch.
+ *
+ * It is ~1.3 MB, so the worker fetches it LAZILY — only when a run actually selects a view
+ * mode. A user who never leaves Views=None never pays for it.
+ */
+function analystViewsArchive() {
+  return {
+    name: 'analyst-views-archive',
+    configureServer(server) {
+      server.middlewares.use('/analyst-views.json', (_req, res) => {
+        if (!existsSync(VIEWS_ARCHIVE)) {
+          res.statusCode = 404;
+          res.setHeader('Content-Type', 'application/json');
+          res.end('{"error":"analyst-views.json missing — run `npm run import-analyst-views` in portfolio-app"}');
+          return;
+        }
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(readFileSync(VIEWS_ARCHIVE));
+      });
+    },
+    generateBundle() {
+      if (!existsSync(VIEWS_ARCHIVE)) return;
+      this.emitFile({ type: 'asset', fileName: 'analyst-views.json', source: readFileSync(VIEWS_ARCHIVE) });
     },
   };
 }
@@ -127,7 +161,14 @@ function referenceGenerator() {
           : [];
         if (universe.length < 2) return json(res, 400, { error: 'Need at least 2 valid tickers.' });
 
-        const prior = ['cap', 'shrunk', 'equal'].includes(body.prior) ? body.prior : 'cap';
+        // Keep in sync with PRIOR_MODES in src/backtestEngine.js (kept a literal here so this
+        // config imports nothing from src). REJECT an unknown value rather than defaulting to
+        // 'cap' — a silent fallback wrote a cap-prior run into the requested prior's filename.
+        const PRIORS = ['cap', 'shrunk', 'equal', 'none'];
+        if (body.prior != null && !PRIORS.includes(body.prior)) {
+          return json(res, 400, { error: `Unknown prior "${body.prior}" (expected ${PRIORS.join(' | ')}).` });
+        }
+        const prior = body.prior ?? 'cap';
         const freqs = Array.isArray(body.freqs) && body.freqs.length
           ? body.freqs.filter(f => ['weekly', 'monthly', 'quarterly'].includes(f))
           : ['weekly', 'monthly', 'quarterly'];
@@ -191,7 +232,7 @@ function referenceGenerator() {
 // project root by default, so we widen fs.allow to the monorepo root ('..') so those
 // imports resolve. backtest-history.json is served from public/ at runtime.
 export default defineConfig({
-  plugins: [react(), biRateArchive(), referenceGenerator()],
+  plugins: [react(), biRateArchive(), analystViewsArchive(), referenceGenerator()],
   server: {
     port: 5174,
     open: true,
